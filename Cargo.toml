@@ -26,3 +26,11 @@ anyhow = "1.0.91"
 rand = "0.9.0-alpha.2"
 clap = { version = "4.5.20", features = ["derive"] }
 redis = { version = "0.27.5", features = ["tokio-comp"] }
+uuid = { version = "1.11.0", features = ["v4"] }
+thiserror = "1.0.65"
+serde = { version = "1.0.210", features = ["derive"] }
+
+
+[dev-dependencies]
+tempdir = "0.3.7"
+tokio-test = "0.4.4"

@@ -1,7 +1,7 @@
 use rdfss::client::client::NodeClient;
 use rdfss::master::brain::Brain;
 use rdfss::tracing::init::{init_tracing, inject_tracing_layer};
-use rdfss::web::router::create_master_router;
+use rdfss::web::master_router::create_master_router;
 
 #[tokio::main]
 async fn main() {

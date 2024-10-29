@@ -16,7 +16,6 @@ impl Storage {
     where
         R: AsyncRead + Unpin + ?Sized,
     {
-        println!("saved");
         let path = std::path::Path::new(&self.name).join(file_name);
 
         let f = match File::create(&path).await {
@@ -48,5 +47,29 @@ impl Storage {
     pub async fn get(&self, file_name: &str) -> anyhow::Result<impl AsyncRead> {
         let path = std::path::Path::new(&self.name).join(file_name);
         Ok(File::open(&path).await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempdir::TempDir;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn test_save() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new("example")?;
+        let s = Storage::new(tmp_dir.path().to_string_lossy().into());
+        let mut reader = tokio_test::io::Builder::new().read(b"Hi there").build();
+        s.save(&mut reader, "test.txt").await?;
+
+        let output = tokio::fs::read_to_string(tmp_dir.path().join("test.txt")).await?;
+        assert_eq!(output, "Hi there");
+
+        let mut reader = s.get("test.txt").await?;
+        let mut dst = String::new();
+        reader.read_to_string(&mut dst).await?;
+        assert_eq!(dst, "Hi there");
+        Ok(())
     }
 }

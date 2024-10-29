@@ -1,6 +1,6 @@
 use clap::Parser;
 use rdfss::tracing::init::{init_tracing, inject_tracing_layer};
-use rdfss::web::router::create_worker_router;
+use rdfss::web::worker_router::create_worker_router;
 use rdfss::worker::storage::Storage;
 
 #[derive(Parser, Debug)]

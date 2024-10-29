@@ -1,5 +1,4 @@
 use redis::AsyncCommands;
-use std::collections::HashMap;
 
 /// Brains takes care of memorizing how file is stored within the whole system -
 /// what chunk of file is held in which worker node.
@@ -13,25 +12,25 @@ impl Brain {
         Self { redis_client }
     }
 
+    pub async fn file_exists(&mut self, file_name: &str) -> anyhow::Result<bool> {
+        Ok(self.redis_client.exists(file_name).await?)
+    }
+
     pub async fn save_file_info(
         &mut self,
         file_name: &str,
-        chunks: HashMap<String, String>,
+        chunks: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
-        self.redis_client
-            .hset_multiple(
-                file_name,
-                &chunks.into_iter().collect::<Vec<(String, String)>>(),
-            )
-            .await?;
+        self.redis_client.hset_multiple(file_name, &chunks).await?;
         Ok(())
     }
 
     pub async fn get_file_info(
         &mut self,
         file_name: &str,
-    ) -> anyhow::Result<HashMap<String, String>> {
-        let info: HashMap<String, String> = self.redis_client.hgetall(file_name).await?;
+    ) -> anyhow::Result<Vec<(String, String)>> {
+        let info: Vec<(String, String)> = self.redis_client.hgetall(file_name).await?;
+
         Ok(info)
     }
 }
