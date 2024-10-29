@@ -1,13 +1,15 @@
+use crate::health;
 use crate::web::AppError;
 use crate::worker::storage::Storage;
 use anyhow::Context;
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use futures::TryStreamExt;
 use std::io;
 use tokio_util::io::{ReaderStream, StreamReader};
+use tonic::{Response, Status};
 
 #[derive(Clone)]
 struct WorkerState {
@@ -25,6 +27,7 @@ pub fn create_worker_router(storage: Storage) -> Router {
     let paths = Router::new()
         .route("/file-chunk/:chunk", post(save_request_body_sync))
         .route("/file-chunk/:chunk", get(get_chunk))
+        .route("/file-chunk/:chunk", delete(delete_chunk))
         .with_state(state);
     Router::new().nest("/v1", paths)
 }
@@ -71,4 +74,28 @@ async fn get_saved_chunk(
     let reader = state.storage.get(&file_name).await?;
     let stream = ReaderStream::new(reader);
     Ok(Body::from_stream(stream))
+}
+
+async fn delete_chunk(
+    State(state): State<WorkerState>,
+    Path(chunk_name): Path<String>,
+) -> Result<axum::http::StatusCode, AppError> {
+    delete_saved_chunk(state, chunk_name).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+async fn delete_saved_chunk(state: WorkerState, chunk_name: String) -> anyhow::Result<()> {
+    state.storage.delete(&chunk_name).await?;
+    Ok(())
+}
+
+/// Implements gRPC Healtchecker service.
+#[derive(Debug, Default)]
+pub struct WorkerHealth {}
+
+#[tonic::async_trait]
+impl health::healthchecker_server::Healthchecker for WorkerHealth {
+    async fn health(&self, request: tonic::Request<()>) -> Result<Response<()>, Status> {
+        Ok(Response::new(()))
+    }
 }

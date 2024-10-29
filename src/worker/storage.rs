@@ -48,6 +48,13 @@ impl Storage {
         let path = std::path::Path::new(&self.name).join(file_name);
         Ok(File::open(&path).await?)
     }
+
+    pub async fn delete(&self, file_name: &str) -> anyhow::Result<()> {
+        let path = std::path::Path::new(&self.name).join(file_name);
+        tokio::fs::remove_file(&path).await?;
+        tracing::debug!(file_name = file_name, "deleted file");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

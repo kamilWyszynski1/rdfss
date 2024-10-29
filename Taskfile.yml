@@ -8,11 +8,11 @@ tasks:
 
   worker1:
     cmds:
-      - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3001 --name=worker1'
+      - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3001 --rpc-port=50051 --name=worker1'
 
   worker2:
     cmds:
-      - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3002 --name=worker2'
+      - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3002 --rpc-port=50052 --name=worker2'
 
   server:
     cmds:

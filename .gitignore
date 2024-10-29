@@ -2,3 +2,5 @@
 .idea
 /worker*
 /files
+.env
+database.db

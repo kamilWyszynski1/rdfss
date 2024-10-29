@@ -18,18 +18,23 @@ tokio = { version = "1", features = ["full"] }
 futures = "0.3.31"
 tokio-util = { version = "0.7.12", features = ["io"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 tower-http = { version = "0.6.1", features = ["trace"] }
 reqwest = { version = "0.12.8", features = ["stream"] }
 async-stream = "0.3.6"
 anyhow = "1.0.91"
 rand = "0.9.0-alpha.2"
 clap = { version = "4.5.20", features = ["derive"] }
-redis = { version = "0.27.5", features = ["tokio-comp"] }
 uuid = { version = "1.11.0", features = ["v4"] }
 thiserror = "1.0.65"
 serde = { version = "1.0.210", features = ["derive"] }
+tonic = "0.12.3"
+diesel = { version = "2.2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = "2.2.0"
+dotenvy = "0.15"
 
+[build-dependencies]
+tonic-build = "0.12.3"
 
 [dev-dependencies]
 tempdir = "0.3.7"

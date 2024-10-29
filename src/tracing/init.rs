@@ -1,5 +1,8 @@
 use axum::extract::{MatchedPath, Request};
 use axum::Router;
+use dotenvy::dotenv;
+use std::time::Duration;
+use std::{env, thread};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -35,7 +38,7 @@ pub fn inject_tracing_layer(r: Router) -> Router {
                     .get::<MatchedPath>()
                     .map(|matched_path| matched_path.as_str());
 
-                tracing::debug_span!("request", %method, %uri, matched_path)
+                tracing::info_span!("request", %method, %uri, matched_path)
             })
             // By default, `TraceLayer` will log 5xx responses but we're doing our specific
             // logging of errors so disable that

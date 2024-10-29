@@ -1,11 +1,12 @@
-use crate::client::client::NodeClient;
-use crate::master::brain::Brain;
+use crate::master::node_client::NodeClient;
+use crate::metadata::models;
+use crate::metadata::sql::MetadataStorage;
 use crate::web::AppError;
 use anyhow::{bail, Context};
 use async_stream::stream;
 use axum::body::{Body, BodyDataStream};
 use axum::extract::{Path, Request, State};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use futures::TryStreamExt;
 use std::io;
@@ -22,20 +23,27 @@ pub(crate) enum MasterAppError {
 const CHUNK_SIZE: u64 = 1 * 1024;
 
 #[derive(Clone)]
-struct MasterAppState {
+pub struct MasterAppState {
     node_client: NodeClient,
-    brain: Brain,
+    metadata: MetadataStorage,
 }
 
-pub fn create_master_router(client: NodeClient, brain: Brain) -> Router {
+impl MasterAppState {
+    pub fn new(node_client: NodeClient, metadata: MetadataStorage) -> Self {
+        Self {
+            node_client,
+            metadata,
+        }
+    }
+}
+
+pub fn create_master_router(state: MasterAppState) -> Router {
     let paths = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/upload/:path", post(upload_file))
         .route("/file/:file_name", get(get_file))
-        .with_state(MasterAppState {
-            node_client: client,
-            brain,
-        });
+        .route("/file/:file_name", delete(delete_file))
+        .with_state(state);
     Router::new().nest("/v1", paths)
 }
 
@@ -50,7 +58,7 @@ async fn get_from_nodes(
     mut handler: MasterAppState,
     file_name: String,
 ) -> anyhow::Result<axum::body::Body> {
-    let file_info = handler.brain.get_file_info(&file_name).await?;
+    let file_info = handler.metadata.get_chunks(&file_name).await?;
     let chunks: Vec<(String, String)> = file_info.into_iter().collect();
 
     tracing::debug!(chunks = format!("{:?}", chunks), "found file chunks");
@@ -82,10 +90,10 @@ async fn upload_file(
 // Save a `Stream` to a file
 async fn stream_to_nodes(
     mut handler: MasterAppState,
-    path: &str,
+    filename: &str,
     stream: BodyDataStream,
 ) -> anyhow::Result<()> {
-    if handler.brain.file_exists(path).await? {
+    if handler.metadata.file_exists(filename).await? {
         bail!(MasterAppError::FileExists);
     }
 
@@ -100,7 +108,7 @@ async fn stream_to_nodes(
 
         let mut reader = body_reader.take(CHUNK_SIZE);
         let mut i = 0;
-        let mut chunks = Vec::new();
+        let mut chunks: Vec<models::Chunk> = Vec::new();
         loop {
             let mut buffer = vec![0; CHUNK_SIZE as usize];
             match reader.read(&mut buffer).await {
@@ -119,15 +127,19 @@ async fn stream_to_nodes(
                 break;
             }
 
-            let name = uuid::Uuid::new_v4().to_string();
+            let chunk_id = uuid::Uuid::new_v4().to_string();
             let node = handler
                 .node_client
-                .send_chunk(&name, buffer)
+                .send_chunk(&chunk_id, buffer)
                 .await
                 .context("could not send chunk")?;
-            tracing::info!(file = name, node = node, "file chunk sent");
+            tracing::info!(file = chunk_id, node = node.0, "file chunk sent");
 
-            chunks.push((name, node));
+            chunks.push(models::Chunk {
+                filename: filename.to_string(),
+                node_id: node.0,
+                id: chunk_id,
+            });
 
             // our reader is now exhausted, but that doesn't mean the underlying reader
             // is. So we recover it, and we create the next chunked reader.
@@ -136,10 +148,40 @@ async fn stream_to_nodes(
         }
 
         tracing::debug!(chunks = format!("{:?}", chunks), "saving chunks info");
-        handler.brain.save_file_info(path, chunks).await?;
+        handler.metadata.save_chunks(chunks).await?;
         anyhow::Ok(())
     }
     .await?;
 
+    Ok(())
+}
+
+async fn delete_file(
+    State(handler): State<MasterAppState>,
+    Path(file_name): Path<String>,
+) -> Result<axum::http::StatusCode, AppError> {
+    delete_from_nodes(handler, file_name).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+async fn delete_from_nodes(mut handler: MasterAppState, file_name: String) -> anyhow::Result<()> {
+    let chunks = handler.metadata.get_chunks(&file_name).await?;
+    if chunks.is_empty() {
+        return Ok(());
+    }
+
+    // TODO: refactor to use outbox pattern
+    for (id, node_url) in chunks {
+        handler
+            .node_client
+            .delete_chunk(&id, &node_url)
+            .await
+            .context("could not delete chunk from node")?;
+        handler
+            .metadata
+            .delete_chunk(&id)
+            .await
+            .context("could not delete chunk from the metadata db")?;
+    }
     Ok(())
 }

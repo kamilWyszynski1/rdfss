@@ -1,11 +1,10 @@
-use crate::web::master_router::MasterAppError;
+use crate::master::router::MasterAppError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-pub mod master_router;
-pub mod worker_router;
+pub type WorkerNameURL = (String, String);
 
 // Make our own error that wraps `anyhow::Error`.
 pub(crate) struct AppError(anyhow::Error);
