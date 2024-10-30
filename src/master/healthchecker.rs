@@ -1,5 +1,6 @@
 use crate::health;
-use crate::health::healthchecker_client::HealthcheckerClient;
+use crate::health::health_client::HealthClient;
+use crate::health::HealthCheckRequest;
 use crate::metadata::models::NodeUpdate;
 use crate::metadata::sql::MetadataStorage;
 use std::collections::HashMap;
@@ -10,17 +11,12 @@ use tonic::transport::Channel;
 
 #[derive(Debug, Clone)]
 pub struct Client {
-    client: health::healthchecker_client::HealthcheckerClient<Channel>,
+    client: health::health_client::HealthClient<Channel>,
     node_id: String,
 }
 
-impl
-    From<(
-        String,
-        health::healthchecker_client::HealthcheckerClient<Channel>,
-    )> for Client
-{
-    fn from(value: (String, HealthcheckerClient<Channel>)) -> Self {
+impl From<(String, health::health_client::HealthClient<Channel>)> for Client {
+    fn from(value: (String, HealthClient<Channel>)) -> Self {
         Self {
             client: value.1,
             node_id: value.0,
@@ -36,10 +32,7 @@ pub struct MasterHealthChecker {
 
 impl MasterHealthChecker {
     pub fn new(
-        clients: Vec<(
-            String,
-            health::healthchecker_client::HealthcheckerClient<Channel>,
-        )>,
+        clients: Vec<(String, health::health_client::HealthClient<Channel>)>,
         metadata: MetadataStorage,
     ) -> Self {
         Self {
@@ -115,7 +108,13 @@ impl HealthcheckActor {
             if !*active {
                 continue;
             }
-            if let Err(err) = client.client.health(()).await {
+            if let Err(err) = client
+                .client
+                .check(HealthCheckRequest {
+                    service: "".to_string(),
+                })
+                .await
+            {
                 tracing::error!(err = format!("{}", err), "health check failed");
 
                 let v = self.failed.entry(inx).or_insert(0);

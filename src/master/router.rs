@@ -9,6 +9,7 @@ use axum::extract::{Path, Request, State};
 use axum::routing::{delete, get, post};
 use axum::Router;
 use futures::TryStreamExt;
+use rand::seq::IteratorRandom;
 use std::io;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
@@ -107,7 +108,6 @@ async fn stream_to_nodes(
         tokio::pin!(body_reader);
 
         let mut reader = body_reader.take(CHUNK_SIZE);
-        let mut i = 0;
         let mut chunks: Vec<models::Chunk> = Vec::new();
         loop {
             let mut buffer = vec![0; CHUNK_SIZE as usize];
@@ -127,24 +127,30 @@ async fn stream_to_nodes(
                 break;
             }
 
+            // pick random node from active ones
+            let nodes = handler.metadata.get_nodes(Some(true)).await?;
+            let node = nodes
+                .iter()
+                .choose(&mut rand::thread_rng())
+                .context("no nodes")?;
+
             let chunk_id = uuid::Uuid::new_v4().to_string();
-            let node = handler
+            handler
                 .node_client
-                .send_chunk(&chunk_id, buffer)
+                .send_chunk(&chunk_id, node, buffer)
                 .await
-                .context("could not send chunk")?;
-            tracing::info!(file = chunk_id, node = node.0, "file chunk sent");
+                .context(format!("could not send chunk to {} node", node.id))?;
+            tracing::info!(file = chunk_id, node = node.id, "file chunk sent");
 
             chunks.push(models::Chunk {
                 filename: filename.to_string(),
-                node_id: node.0,
+                node_id: node.id.to_string(),
                 id: chunk_id,
             });
 
             // our reader is now exhausted, but that doesn't mean the underlying reader
             // is. So we recover it, and we create the next chunked reader.
             reader = reader.into_inner().take(CHUNK_SIZE);
-            i += 1;
         }
 
         tracing::debug!(chunks = format!("{:?}", chunks), "saving chunks info");

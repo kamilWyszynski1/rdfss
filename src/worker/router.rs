@@ -1,4 +1,3 @@
-use crate::health;
 use crate::web::AppError;
 use crate::worker::storage::Storage;
 use anyhow::Context;
@@ -9,7 +8,6 @@ use axum::Router;
 use futures::TryStreamExt;
 use std::io;
 use tokio_util::io::{ReaderStream, StreamReader};
-use tonic::{Response, Status};
 
 #[derive(Clone)]
 struct WorkerState {
@@ -87,15 +85,4 @@ async fn delete_chunk(
 async fn delete_saved_chunk(state: WorkerState, chunk_name: String) -> anyhow::Result<()> {
     state.storage.delete(&chunk_name).await?;
     Ok(())
-}
-
-/// Implements gRPC Healtchecker service.
-#[derive(Debug, Default)]
-pub struct WorkerHealth {}
-
-#[tonic::async_trait]
-impl health::healthchecker_server::Healthchecker for WorkerHealth {
-    async fn health(&self, request: tonic::Request<()>) -> Result<Response<()>, Status> {
-        Ok(Response::new(()))
-    }
 }

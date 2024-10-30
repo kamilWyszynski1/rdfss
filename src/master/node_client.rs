@@ -1,6 +1,6 @@
+use crate::metadata::models::Node;
 use crate::web::WorkerNameURL;
 use anyhow::{bail, Context};
-use rand::seq::IndexedRandom;
 
 #[derive(Clone)]
 pub struct NodeClient {
@@ -13,21 +13,15 @@ impl NodeClient {
         Self { urls, client }
     }
 
-    pub async fn send_chunk(&self, name: &str, data: Vec<u8>) -> anyhow::Result<WorkerNameURL> {
-        // pick random url
-        let name_url = self
-            .urls
-            .choose(&mut rand::thread_rng())
-            .context("no url")?;
-
+    pub async fn send_chunk(&self, name: &str, node: &Node, data: Vec<u8>) -> anyhow::Result<()> {
         self.client
-            .post(format!("{}/{}/{}", name_url.1, "v1/file-chunk", name))
+            .post(format!("{}/{}/{}", node.web, "v1/file-chunk", name))
             .body(data)
             .send()
             .await
             .context("failed post")?;
 
-        Ok(name_url.clone())
+        Ok(())
     }
 
     pub async fn get_chunk(&self, name: &str, node_url: &str) -> anyhow::Result<Vec<u8>> {

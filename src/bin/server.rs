@@ -1,7 +1,10 @@
+#![feature(duration_constructors)]
+
+use consulrs::client::{ConsulClient, ConsulClientSettingsBuilder};
 use diesel::{Connection, SqliteConnection};
 use dotenvy::dotenv;
 use rdfss::health;
-use rdfss::master::healthchecker::MasterHealthChecker;
+use rdfss::master::master::Master;
 use rdfss::master::node_client::NodeClient;
 use rdfss::master::router::{create_master_router, MasterAppState};
 use rdfss::metadata::sql::MetadataStorage;
@@ -10,7 +13,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -38,15 +41,28 @@ async fn main() -> anyhow::Result<()> {
     for (node_id, url) in rpcs {
         clients.push((
             node_id,
-            health::healthchecker_client::HealthcheckerClient::connect(url).await?,
+            health::health_client::HealthClient::connect(url).await?,
         ));
     }
 
     let cancel_token = CancellationToken::new();
 
-    let healthcheck = MasterHealthChecker::new(clients, metadata.clone());
-    healthcheck
-        .run(Duration::from_secs(5), cancel_token.clone())
+    // let healthcheck = MasterHealthChecker::new(clients, metadata.clone());
+    // healthcheck
+    //     .run(Duration::from_secs(5), cancel_token.clone())
+    //     .await;
+
+    let consul_client = ConsulClient::new(
+        ConsulClientSettingsBuilder::default()
+            .address("http://0.0.0.0:8500")
+            .build()?,
+    )?;
+
+    let (s, r) = broadcast::channel(8);
+
+    let master = Master::new(s, metadata, tokio::time::Duration::from_mins(1));
+    master
+        .run(Duration::from_secs(5), consul_client, cancel_token.clone())
         .await;
 
     // build our application with a single route

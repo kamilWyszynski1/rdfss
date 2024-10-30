@@ -1,7 +1,9 @@
 use clap::Parser;
 use rdfss::health;
 use rdfss::tracing::init::{init_tracing, inject_tracing_layer};
-use rdfss::worker::router::{create_worker_router, WorkerHealth};
+use rdfss::worker::consul::register_worker;
+use rdfss::worker::router::create_worker_router;
+use rdfss::worker::rpc::WorkerHealth;
 use rdfss::worker::storage::Storage;
 use std::net::SocketAddr;
 use tonic::transport::Server;
@@ -37,14 +39,22 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("[::1]:{}", args.rpc_port).parse()?;
     let h = WorkerHealth::default();
 
+    let name = args.name.clone();
     let rpc_h = tokio::spawn(async move {
         Server::builder()
-            .trace_fn(move |_| tracing::info_span!("rpc", name = args.name.clone()))
-            .add_service(health::healthchecker_server::HealthcheckerServer::new(h))
+            .trace_fn(move |_| tracing::info_span!("rpc", name = name))
+            .add_service(health::health_server::HealthServer::new(h))
             .serve(addr)
             .await
     });
 
+    register_worker(
+        &args.name,
+        "localhost",
+        args.port as u64,
+        &format!("[::1]:{}", args.rpc_port),
+    )
+    .await?;
     tokio::join!(axum_h, rpc_h);
 
     Ok(())

@@ -21,3 +21,8 @@ tasks:
   redis:
     cmds:
       - docker run --name my-redis -p 6379:6379 --restart always --detach redis
+
+  consul:
+    dir: /
+    cmds:
+      - consul agent -data-dir=/tmp/consul -dev
