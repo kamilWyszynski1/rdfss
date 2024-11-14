@@ -1,16 +1,14 @@
 use crate::metadata::models::Node;
-use crate::web::WorkerNameURL;
 use anyhow::{bail, Context};
 
 #[derive(Clone)]
 pub struct NodeClient {
-    urls: Vec<WorkerNameURL>,
     client: reqwest::Client,
 }
 
 impl NodeClient {
-    pub fn new(urls: Vec<WorkerNameURL>, client: reqwest::Client) -> Self {
-        Self { urls, client }
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
     }
 
     pub async fn send_chunk(&self, name: &str, node: &Node, data: Vec<u8>) -> anyhow::Result<()> {

@@ -3,7 +3,6 @@
 use consulrs::client::{ConsulClient, ConsulClientSettingsBuilder};
 use diesel::{Connection, SqliteConnection};
 use dotenvy::dotenv;
-use rdfss::health;
 use rdfss::master::master::Master;
 use rdfss::master::node_client::NodeClient;
 use rdfss::master::router::{create_master_router, MasterAppState};
@@ -25,25 +24,30 @@ async fn main() -> anyhow::Result<()> {
     let mut metadata = MetadataStorage::new(sqlite_conn.clone());
     let nodes = metadata.get_nodes(Some(true)).await?;
 
-    let https: Vec<(String, String)> = nodes
-        .clone()
-        .into_iter()
-        .clone()
-        .map(|n| (n.id, n.web))
-        .collect();
-    let rpcs: Vec<(String, String)> = nodes.into_iter().map(|n| (n.id, n.rpc)).collect();
-
-    let client = NodeClient::new(https, reqwest::Client::new());
+    let client = NodeClient::new(reqwest::Client::new());
 
     let state = MasterAppState::new(client, metadata.clone());
 
-    let mut clients = vec![];
-    for (node_id, url) in rpcs {
-        clients.push((
-            node_id,
-            health::health_client::HealthClient::connect(url).await?,
-        ));
-    }
+    // let mut clients = vec![];
+    // for (node_id, url) in rpcs {
+    //     match health::health_client::HealthClient::connect(url).await {
+    //         Ok(client) => clients.push((node_id, client)),
+    //         Err(err) => {
+    //             tracing::warn!(
+    //                 err = format!("{:?}", err),
+    //                 "could not create healthcheck client"
+    //             );
+    //             metadata
+    //                 .update_node(
+    //                     &node_id,
+    //                     NodeUpdate {
+    //                         active: Some(false),
+    //                     },
+    //                 )
+    //                 .await?;
+    //         }
+    //     }
+    // }
 
     let cancel_token = CancellationToken::new();
 

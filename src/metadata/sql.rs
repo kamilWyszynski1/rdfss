@@ -34,6 +34,9 @@ impl MetadataStorage {
         self.run_in_conn(|conn| {
             diesel::insert_into(nodes::table)
                 .values(&node)
+                .on_conflict(nodes::id)
+                .do_update()
+                .set(nodes::active.eq(node.active))
                 .execute(&mut *conn)?;
             Ok(())
         })

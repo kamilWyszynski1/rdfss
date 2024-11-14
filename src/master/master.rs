@@ -152,10 +152,6 @@ impl MasterActor {
         }
 
         self.running_nodes.insert(node.to_string());
-        if self.metadata.get_node(node).await?.is_some() {
-            return Ok(());
-        }
-
         self.metadata
             .save_node(Node {
                 id: node.to_string(),
@@ -175,7 +171,7 @@ fn check_if_worker_is_health(
 ) -> bool {
     match res {
         Ok(_) => {
-            tracing::info!(worker_name = name, "worker node is health");
+            tracing::info!(worker_name = name, "worker node is healthy");
             true
         }
         Err(err) => match err {
