@@ -49,12 +49,18 @@ impl Master {
         tokio::spawn(run_master_actor(actor, cancellation_token.clone()));
 
         let mut health_interval = tokio::time::interval(health_interval);
+        let mut chunks_check_interval = tokio::time::interval(Duration::from_secs(5));
 
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = health_interval.tick() => {
                         if let Err(err) = sender.send(MasterActorMessage::Health).await {
+                            tracing::error!(err=format!("{}", err), "could not send message");
+                        }
+                    }
+                    _ = chunks_check_interval.tick() => {
+                        if let Err(err) = sender.send(MasterActorMessage::Chunks).await {
                             tracing::error!(err=format!("{}", err), "could not send message");
                         }
                     }
@@ -83,7 +89,8 @@ struct MasterActor {
 }
 
 enum MasterActorMessage {
-    Health,
+    Health, // check workers health status form consul
+    Chunks, // check if chunks' replication factor is met
 }
 
 impl MasterActor {
@@ -108,6 +115,7 @@ impl MasterActor {
     async fn handle(&mut self, msg: MasterActorMessage) -> anyhow::Result<()> {
         match msg {
             MasterActorMessage::Health => self.handle_health().await,
+            MasterActorMessage::Chunks => self.handle_chunks().await,
         }
     }
 
@@ -162,6 +170,10 @@ impl MasterActor {
             .await?;
 
         Ok(())
+    }
+
+    async fn handle_chunks(&mut self) -> anyhow::Result<()> {
+        todo!()
     }
 }
 

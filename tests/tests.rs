@@ -2,7 +2,7 @@ extern crate diesel_migrations;
 use anyhow;
 use diesel::{Connection, SqliteConnection};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use rdfss::metadata::models::{Chunk, Node, NodeUpdate};
+use rdfss::metadata::models::{Chunk, ChunkLocation, ChunkWithWeb, Node, NodeUpdate};
 use rdfss::metadata::sql::MetadataStorage;
 use std::env::temp_dir;
 use std::sync::Arc;
@@ -51,30 +51,49 @@ async fn test_sql() -> anyhow::Result<()> {
             Chunk {
                 id: "chunk1".to_string(),
                 filename: "file1".to_string(),
-                node_id: "id1".to_string(),
             },
             Chunk {
                 id: "chunk2".to_string(),
                 filename: "file1".to_string(),
+            },
+        ])
+        .await?;
+    storage
+        .save_chunk_locations(vec![
+            ChunkLocation {
+                chunk_id: "chunk1".to_string(),
+                node_id: "id1".to_string(),
+            },
+            ChunkLocation {
+                chunk_id: "chunk2".to_string(),
                 node_id: "id2".to_string(),
             },
         ])
         .await?;
 
-    let chunks = storage.get_chunks("file1").await?;
+    let chunks = storage.get_chunks_with_web("file1").await?;
     assert_eq!(
         chunks,
         vec![
-            ("chunk1".to_string(), "localhost:3001".to_string()),
-            ("chunk2".to_string(), "localhost:3002".to_string())
+            ChunkWithWeb {
+                chunk_id: "chunk1".to_string(),
+                web: "localhost:3001".to_string()
+            },
+            ChunkWithWeb {
+                chunk_id: "chunk2".to_string(),
+                web: "localhost:3002".to_string()
+            }
         ]
     );
 
     storage.delete_chunk("chunk1").await?;
-    let chunks = storage.get_chunks("file1").await?;
+    let chunks = storage.get_chunks_with_web("file1").await?;
     assert_eq!(
         chunks,
-        vec![("chunk2".to_string(), "localhost:3002".to_string()),]
+        vec![ChunkWithWeb {
+            chunk_id: "chunk2".to_string(),
+            web: "localhost:3002".to_string()
+        }]
     );
 
     assert!(storage.file_exists("file1").await?);

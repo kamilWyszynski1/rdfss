@@ -59,14 +59,13 @@ async fn get_from_nodes(
     mut handler: MasterAppState,
     file_name: String,
 ) -> anyhow::Result<axum::body::Body> {
-    let file_info = handler.metadata.get_chunks(&file_name).await?;
-    let chunks: Vec<(String, String)> = file_info.into_iter().collect();
+    let file_info = handler.metadata.get_chunks_with_web(&file_name).await?;
 
-    tracing::debug!(chunks = format!("{:?}", chunks), "found file chunks");
+    tracing::debug!(chunks = format!("{:?}", file_info), "found file chunks");
 
     let s = stream! {
-        for (chunk, node_url) in chunks {
-            match handler.node_client.get_chunk(&chunk, &node_url).await {
+        for fi in file_info {
+            match handler.node_client.get_chunk(&fi.chunk_id, &fi.web).await {
                 Ok(data) => {yield Ok(data)}
                 Err(err) => {yield Err(err)}
             }
@@ -109,6 +108,8 @@ async fn stream_to_nodes(
 
         let mut reader = body_reader.take(CHUNK_SIZE);
         let mut chunks: Vec<models::Chunk> = Vec::new();
+        let mut chunk_locations: Vec<models::ChunkLocation> = Vec::new();
+
         loop {
             let mut buffer = vec![0; CHUNK_SIZE as usize];
             match reader.read(&mut buffer).await {
@@ -144,8 +145,12 @@ async fn stream_to_nodes(
 
             chunks.push(models::Chunk {
                 filename: filename.to_string(),
+                // node_id: node.id.to_string(),
+                id: chunk_id.clone(),
+            });
+            chunk_locations.push(models::ChunkLocation {
+                chunk_id,
                 node_id: node.id.to_string(),
-                id: chunk_id,
             });
 
             // our reader is now exhausted, but that doesn't mean the underlying reader
@@ -155,6 +160,11 @@ async fn stream_to_nodes(
 
         tracing::debug!(chunks = format!("{:?}", chunks), "saving chunks info");
         handler.metadata.save_chunks(chunks).await?;
+        handler
+            .metadata
+            .save_chunk_locations(chunk_locations)
+            .await?;
+
         anyhow::Ok(())
     }
     .await?;
@@ -171,21 +181,21 @@ async fn delete_file(
 }
 
 async fn delete_from_nodes(mut handler: MasterAppState, file_name: String) -> anyhow::Result<()> {
-    let chunks = handler.metadata.get_chunks(&file_name).await?;
+    let chunks = handler.metadata.get_chunks_with_web(&file_name).await?;
     if chunks.is_empty() {
         return Ok(());
     }
 
     // TODO: refactor to use outbox pattern
-    for (id, node_url) in chunks {
+    for ch in chunks {
         handler
             .node_client
-            .delete_chunk(&id, &node_url)
+            .delete_chunk(&ch.chunk_id, &ch.web)
             .await
             .context("could not delete chunk from node")?;
         handler
             .metadata
-            .delete_chunk(&id)
+            .delete_chunk(&ch.chunk_id)
             .await
             .context("could not delete chunk from the metadata db")?;
     }

@@ -1,6 +1,9 @@
-use crate::metadata::models::{Chunk, Node, NodeUpdate};
+use crate::metadata::models::{Chunk, ChunkLocation, ChunkWithWeb, Node, NodeUpdate};
 use crate::schema::*;
 use diesel::prelude::*;
+use diesel::sql_query;
+use diesel::sql_types::Text;
+use diesel::sqlite::Sqlite;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -84,12 +87,22 @@ impl MetadataStorage {
     }
 
     #[tracing::instrument]
-    pub async fn get_chunks(&mut self, fname: &str) -> anyhow::Result<Vec<(String, String)>> {
+    pub async fn get_chunks(&mut self) -> anyhow::Result<Vec<Chunk>> {
         self.run_in_conn(|conn| {
-            let a = chunks::table
+            let a = chunks::table.load(conn)?;
+            Ok(a)
+        })
+        .await
+    }
+
+    #[tracing::instrument]
+    pub async fn get_chunks_with_web(&mut self, fname: &str) -> anyhow::Result<Vec<ChunkWithWeb>> {
+        self.run_in_conn(|conn| {
+            let a: Vec<ChunkWithWeb> = chunk_locations::table
                 .inner_join(nodes::table)
+                .inner_join(chunks::table)
                 .filter(chunks::filename.eq(fname))
-                .select((chunks::id, nodes::web))
+                .select((chunk_locations::chunk_id, nodes::web))
                 .load(conn)?;
             Ok(a)
         })
@@ -136,6 +149,21 @@ impl MetadataStorage {
         self.run_in_conn(|conn| {
             diesel::insert_into(chunks::table)
                 .values(&chunks)
+                .execute(conn)?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tracing::instrument]
+    pub async fn save_chunk_locations(
+        &mut self,
+        chunk_locations: Vec<ChunkLocation>,
+    ) -> anyhow::Result<()> {
+        tracing::info!("saving chunk locations");
+        self.run_in_conn(|conn| {
+            diesel::insert_into(chunk_locations::table)
+                .values(&chunk_locations)
                 .execute(conn)?;
             Ok(())
         })
