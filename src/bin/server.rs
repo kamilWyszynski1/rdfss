@@ -4,7 +4,7 @@ use consulrs::client::{ConsulClient, ConsulClientSettingsBuilder};
 use diesel::{Connection, SqliteConnection};
 use dotenvy::dotenv;
 use rdfss::master::master::Master;
-use rdfss::master::node_client::NodeClient;
+use rdfss::master::node_client::HTTPNodeClient;
 use rdfss::master::router::{create_master_router, MasterAppState};
 use rdfss::metadata::sql::MetadataStorage;
 use rdfss::tracing::init::{init_tracing, inject_tracing_layer};
@@ -24,9 +24,11 @@ async fn main() -> anyhow::Result<()> {
     let mut metadata = MetadataStorage::new(sqlite_conn.clone());
     let nodes = metadata.get_nodes(Some(true)).await?;
 
-    let client = NodeClient::new(reqwest::Client::new());
+    let client = Arc::new(HTTPNodeClient::new(reqwest::Client::new()));
 
     let state = MasterAppState::new(client, metadata.clone());
+
+    let node_client = HTTPNodeClient::new(reqwest::Client::new());
 
     // let mut clients = vec![];
     // for (node_id, url) in rpcs {
@@ -64,9 +66,14 @@ async fn main() -> anyhow::Result<()> {
 
     let (s, r) = broadcast::channel(8);
 
-    let master = Master::new(s, metadata, tokio::time::Duration::from_mins(1));
+    let master = Master::new(s, metadata, tokio::time::Duration::from_secs(5));
     master
-        .run(Duration::from_secs(5), consul_client, cancel_token.clone())
+        .run(
+            Duration::from_secs(5),
+            node_client,
+            consul_client,
+            cancel_token.clone(),
+        )
         .await;
 
     // build our application with a single route

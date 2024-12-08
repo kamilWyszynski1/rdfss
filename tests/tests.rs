@@ -2,7 +2,7 @@ extern crate diesel_migrations;
 use anyhow;
 use diesel::{Connection, SqliteConnection};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use rdfss::metadata::models::{Chunk, ChunkLocation, ChunkWithWeb, Node, NodeUpdate};
+use rdfss::metadata::models::{Chunk, ChunkLocation, ChunkWithWeb, File, Node, NodeUpdate};
 use rdfss::metadata::sql::MetadataStorage;
 use std::env::temp_dir;
 use std::sync::Arc;
@@ -46,18 +46,26 @@ async fn test_sql() -> anyhow::Result<()> {
     let nodes = storage.get_nodes(None).await?;
     assert_eq!(nodes.len(), 2);
 
+    let file_id = uuid::Uuid::new_v4().to_string();
+    let file = File::new(file_id.clone(), "file1".to_string());
+
+    storage.save_file(&file).await?;
+
     storage
         .save_chunks(vec![
             Chunk {
                 id: "chunk1".to_string(),
-                filename: "file1".to_string(),
+                file_id: file_id.clone(),
+                chunk_index: 0,
             },
             Chunk {
                 id: "chunk2".to_string(),
-                filename: "file1".to_string(),
+                file_id: file_id.clone(),
+                chunk_index: 1,
             },
         ])
         .await?;
+
     storage
         .save_chunk_locations(vec![
             ChunkLocation {
@@ -77,11 +85,13 @@ async fn test_sql() -> anyhow::Result<()> {
         vec![
             ChunkWithWeb {
                 chunk_id: "chunk1".to_string(),
-                web: "localhost:3001".to_string()
+                web: "localhost:3001".to_string(),
+                chunk_index: 0,
             },
             ChunkWithWeb {
                 chunk_id: "chunk2".to_string(),
-                web: "localhost:3002".to_string()
+                web: "localhost:3002".to_string(),
+                chunk_index: 1,
             }
         ]
     );
@@ -92,13 +102,15 @@ async fn test_sql() -> anyhow::Result<()> {
         chunks,
         vec![ChunkWithWeb {
             chunk_id: "chunk2".to_string(),
-            web: "localhost:3002".to_string()
+            web: "localhost:3002".to_string(),
+            chunk_index: 1,
         }]
     );
 
     assert!(storage.file_exists("file1").await?);
 
     storage.delete_chunk("chunk2").await?;
+    storage.delete_file(&file_id).await?;
 
     assert_eq!(storage.file_exists("file1").await?, false);
 
@@ -112,7 +124,6 @@ async fn test_sql() -> anyhow::Result<()> {
         .await?;
 
     let nodes = storage.get_nodes(None).await?;
-    dbg!(&nodes);
     assert_eq!(nodes.iter().find(|n| n.id == "id2").unwrap().active, false);
 
     Ok(())

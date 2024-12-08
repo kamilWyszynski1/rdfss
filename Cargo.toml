@@ -13,14 +13,14 @@ name = "server"
 path = "src/bin/server.rs"
 
 [dependencies]
-axum = { version = "0.7.7", features = ["default", "multipart"] }
+axum = { version = "0.7.7", features = ["default", "multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3.31"
 tokio-util = { version = "0.7.12", features = ["io"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
 tower-http = { version = "0.6.1", features = ["trace"] }
-reqwest = { version = "0.12.8", features = ["stream"] }
+reqwest = { version = "0.12.8", features = ["stream", "json"] }
 async-stream = "0.3.6"
 anyhow = "1.0.91"
 rand = "0.9.0-alpha.2"
@@ -29,11 +29,13 @@ uuid = { version = "1.11.0", features = ["v4"] }
 thiserror = "1.0.65"
 serde = { version = "1.0.210", features = ["derive"] }
 tonic = "0.12.3"
-diesel = { version = "2.2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel = { version = "2.2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "chrono"] }
 diesel_migrations = "2.2.0"
 dotenvy = "0.15"
 consulrs = "0.1.0"
 prost = "0.13.3"
+chrono = "0.4.38"
+derive_builder = "0.20.2"
 
 [build-dependencies]
 tonic-build = "0.12.3"
@@ -41,3 +43,5 @@ tonic-build = "0.12.3"
 [dev-dependencies]
 tempdir = "0.3.7"
 tokio-test = "0.4.4"
+mockall = "0.13.1"
+

@@ -1,5 +1,6 @@
-use crate::master::node_client::NodeClient;
+use crate::master::node_client::{HTTPNodeClient, NodeClient};
 use crate::metadata::models;
+use crate::metadata::models::File;
 use crate::metadata::sql::MetadataStorage;
 use crate::web::AppError;
 use anyhow::{bail, Context};
@@ -8,9 +9,11 @@ use axum::body::{Body, BodyDataStream};
 use axum::extract::{Path, Request, State};
 use axum::routing::{delete, get, post};
 use axum::Router;
+use chrono::NaiveDateTime;
 use futures::TryStreamExt;
 use rand::seq::IteratorRandom;
 use std::io;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::StreamReader;
@@ -25,12 +28,12 @@ const CHUNK_SIZE: u64 = 1 * 1024;
 
 #[derive(Clone)]
 pub struct MasterAppState {
-    node_client: NodeClient,
+    node_client: Arc<dyn NodeClient + Send + Sync>,
     metadata: MetadataStorage,
 }
 
 impl MasterAppState {
-    pub fn new(node_client: NodeClient, metadata: MetadataStorage) -> Self {
+    pub fn new(node_client: Arc<dyn NodeClient + Send + Sync>, metadata: MetadataStorage) -> Self {
         Self {
             node_client,
             metadata,
@@ -110,6 +113,11 @@ async fn stream_to_nodes(
         let mut chunks: Vec<models::Chunk> = Vec::new();
         let mut chunk_locations: Vec<models::ChunkLocation> = Vec::new();
 
+        let mut chunk_index = 0;
+
+        let file_id = uuid::Uuid::new_v4().to_string();
+        let file = File::new(file_id.clone(), filename.to_string());
+
         loop {
             let mut buffer = vec![0; CHUNK_SIZE as usize];
             match reader.read(&mut buffer).await {
@@ -138,15 +146,15 @@ async fn stream_to_nodes(
             let chunk_id = uuid::Uuid::new_v4().to_string();
             handler
                 .node_client
-                .send_chunk(&chunk_id, node, buffer)
+                .send_chunk(&chunk_id, &node.web, buffer)
                 .await
                 .context(format!("could not send chunk to {} node", node.id))?;
             tracing::info!(file = chunk_id, node = node.id, "file chunk sent");
 
             chunks.push(models::Chunk {
-                filename: filename.to_string(),
-                // node_id: node.id.to_string(),
+                file_id: file_id.clone(),
                 id: chunk_id.clone(),
+                chunk_index,
             });
             chunk_locations.push(models::ChunkLocation {
                 chunk_id,
@@ -156,13 +164,19 @@ async fn stream_to_nodes(
             // our reader is now exhausted, but that doesn't mean the underlying reader
             // is. So we recover it, and we create the next chunked reader.
             reader = reader.into_inner().take(CHUNK_SIZE);
+            chunk_index += 1;
         }
 
         tracing::debug!(chunks = format!("{:?}", chunks), "saving chunks info");
-        handler.metadata.save_chunks(chunks).await?;
         handler
             .metadata
-            .save_chunk_locations(chunk_locations)
+            .tx(|uow| {
+                // TODO: use outbox pattern and sync with sent files
+                uow.save_file(&file)?;
+                uow.save_chunks(chunks)?;
+                uow.save_chunk_locations(chunk_locations)?;
+                Ok(())
+            })
             .await?;
 
         anyhow::Ok(())
@@ -199,5 +213,6 @@ async fn delete_from_nodes(mut handler: MasterAppState, file_name: String) -> an
             .await
             .context("could not delete chunk from the metadata db")?;
     }
+    handler.metadata.delete_file_by_name(&file_name).await?;
     Ok(())
 }

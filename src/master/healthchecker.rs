@@ -115,7 +115,7 @@ impl HealthcheckActor {
                 })
                 .await
             {
-                tracing::error!(err = format!("{}", err), "health check failed");
+                tracing::error!(err = ?err, "health check failed");
 
                 let v = self.failed.entry(inx).or_insert(0);
                 *v += 1;

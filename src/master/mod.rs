@@ -1,3 +1,4 @@
+mod consul;
 pub mod healthchecker;
 pub mod master;
 pub mod node_client;

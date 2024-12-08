@@ -1,11 +1,13 @@
 use clap::Parser;
 use rdfss::health;
+use rdfss::master::node_client::HTTPNodeClient;
 use rdfss::tracing::init::{init_tracing, inject_tracing_layer};
 use rdfss::worker::consul::register_worker;
 use rdfss::worker::router::create_worker_router;
 use rdfss::worker::rpc::WorkerHealth;
 use rdfss::worker::storage::Storage;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tonic::transport::Server;
 
 #[derive(Parser, Debug)]
@@ -28,10 +30,14 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracing();
 
+    // interface for files operations
     let storage = Storage::new(args.name.clone());
 
+    // node might need to call another node (chunk replication)
+    let node_client = HTTPNodeClient::new(reqwest::Client::new());
+
     // build our application with a single route
-    let app = inject_tracing_layer(create_worker_router(storage));
+    let app = inject_tracing_layer(create_worker_router(storage, Arc::new(node_client)));
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
     let axum_h = tokio::spawn(async { axum::serve(listener, app).await });

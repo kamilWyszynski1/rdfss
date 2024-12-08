@@ -11,7 +11,18 @@ diesel::table! {
 diesel::table! {
     chunks (id) {
         id -> Text,
-        filename -> Text,
+        file_id -> Text,
+        chunk_index -> Integer,
+    }
+}
+
+diesel::table! {
+    files (id) {
+        id -> Text,
+        name -> Text,
+        created_at -> Timestamp,
+        modified_at -> Timestamp,
+        replication_factor -> Integer,
     }
 }
 
@@ -26,9 +37,11 @@ diesel::table! {
 
 diesel::joinable!(chunk_locations -> chunks (chunk_id));
 diesel::joinable!(chunk_locations -> nodes (node_id));
+diesel::joinable!(chunks -> files (file_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     chunk_locations,
     chunks,
+    files,
     nodes,
 );
