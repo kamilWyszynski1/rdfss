@@ -87,6 +87,7 @@ async fn test_sql() -> anyhow::Result<()> {
         .get_chunks_with_web(
             &ChunkWithWebQueryBuilder::default()
                 .file_name("file1")
+                .node_active(true)
                 .build()?,
         )
         .await?;
@@ -111,6 +112,7 @@ async fn test_sql() -> anyhow::Result<()> {
         .get_chunks_with_web(
             &ChunkWithWebQueryBuilder::default()
                 .file_name("file1")
+                .node_active(true)
                 .build()?,
         )
         .await?;

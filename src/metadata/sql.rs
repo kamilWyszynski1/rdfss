@@ -323,6 +323,24 @@ impl<'a> UOW<'a> {
             if let Some(to_delete) = &chunks_query.to_delete {
                 joined = joined.filter(chunks::to_delete.eq(to_delete))
             }
+            if let Some(node_id) = &chunks_query.node_id {
+                joined = joined.filter(nodes::id.eq(node_id))
+            }
+            return Ok(joined.load(self.conn)?);
+        } else if let Some(node_id) = &chunks_query.node_id {
+            let mut joined = chunk_locations::table
+                .inner_join(chunks::table)
+                .inner_join(nodes::table)
+                .select(chunks::all_columns)
+                .filter(nodes::id.eq(node_id))
+                .into_boxed();
+
+            if let Some(id) = &chunks_query.file_id {
+                joined = joined.filter(chunks::file_id.eq(id))
+            }
+            if let Some(to_delete) = &chunks_query.to_delete {
+                joined = joined.filter(chunks::to_delete.eq(to_delete))
+            }
             return Ok(joined.load(self.conn)?);
         }
 
@@ -345,12 +363,12 @@ impl<'a> UOW<'a> {
             .inner_join(nodes::table)
             .inner_join(chunks::table)
             .inner_join(files::table.on(chunks::file_id.eq(files::id)))
-            .filter(nodes::active.eq(true))
             .select((
                 chunk_locations::chunk_id,
                 chunks::chunk_index,
                 nodes::web,
                 files::id,
+                nodes::active,
             ))
             .into_boxed();
 
@@ -359,6 +377,9 @@ impl<'a> UOW<'a> {
         }
         if let Some(to_delete) = &query.to_delete {
             boxed = boxed.filter(chunks::to_delete.eq(to_delete));
+        }
+        if let Some(node_active) = &query.node_active {
+            boxed = boxed.filter(nodes::active.eq(node_active));
         }
 
         Ok(boxed.load(self.conn)?)
