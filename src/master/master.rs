@@ -1,8 +1,8 @@
 use crate::master::consul::{Consul, Wrap};
 use crate::master::node_client::{HTTPNodeClient, NodeClient};
 use crate::metadata::models::{
-    Chunk, ChunkLocation, ChunkUpdate, ChunkWithWeb, ChunkWithWebQuery, ChunkWithWebQueryBuilder,
-    ChunksQueryBuilder, File, Node, NodeUpdate,
+    Chunk, ChunkLocation, ChunkUpdate, ChunkWithWeb, ChunkWithWebQueryBuilder, ChunksQueryBuilder,
+    File, Node, NodeUpdate,
 };
 use crate::metadata::sql::MetadataStorage;
 use crate::worker::router::{Order, ReplicationOrder};
@@ -59,7 +59,8 @@ impl Master {
 
         let mut health_interval = tokio::time::interval(health_interval);
         let mut chunks_check_interval = tokio::time::interval(Duration::from_secs(5)); // TODO: set from main
-        let mut delete_marked_interval = tokio::time::interval(Duration::from_secs(5)); // TODO: set from main
+        let mut delete_marked_chunks_interval = tokio::time::interval(Duration::from_secs(5)); // TODO: set from main
+        let mut delete_marked_nodes_interval = tokio::time::interval(Duration::from_secs(5));
 
         tokio::spawn(async move {
             loop {
@@ -74,10 +75,15 @@ impl Master {
                             tracing::error!(err=format!("{}", err), "could not send message");
                         }
                     }
-                    _ = delete_marked_interval.tick() => {
+                    _ = delete_marked_chunks_interval.tick() => {
                          if let Err(err) = sender.send(MasterActorMessage::DeleteMarkedChunks).await {
                             tracing::error!(err=format!("{}", err), "could not send message");
-                        }
+                         }
+                    }
+                    _ = delete_marked_nodes_interval.tick() => {
+                         if let Err(err) = sender.send(MasterActorMessage::DeleteMarkedNodes).await {
+                            tracing::error!(err=format!("{}", err), "could not send message");
+                         }
                     }
                     _ = cancellation_token.cancelled() => {
                         tracing::info!("closing master");
@@ -113,6 +119,10 @@ enum MasterActorMessage {
     // Query chunks that are marked "to_delete" and call proper nodes to remove data.
     // If every piece was deleted set proper state in metadata db.
     DeleteMarkedChunks,
+
+    // Query nodes that are marked as inactive, delete all related chunks from metadata
+    // so these can be redistributed by Self::Chunks,
+    DeleteMarkedNodes,
 }
 
 impl MasterActor {
@@ -140,7 +150,8 @@ impl MasterActor {
         match msg {
             MasterActorMessage::Health => self.handle_health().await,
             MasterActorMessage::Chunks => self.handle_chunks().await,
-            MasterActorMessage::DeleteMarkedChunks => self.handle_deletion().await,
+            MasterActorMessage::DeleteMarkedChunks => self.handle_chunks_deletion().await,
+            MasterActorMessage::DeleteMarkedNodes => self.handle_nodes_deletion().await,
         }
     }
 
@@ -183,6 +194,8 @@ impl MasterActor {
         if self.running_nodes.contains(node) {
             return Ok(());
         }
+
+        // TODO: implement logic for node with data coming back to life
 
         tracing::info!(node=%node, "reconciling node");
 
@@ -231,6 +244,7 @@ impl MasterActor {
                 .get_chunks_with_web(
                     &ChunkWithWebQueryBuilder::default()
                         .file_name(&file.name)
+                        .node_active(true)
                         .build()?,
                 )
                 .await
@@ -428,7 +442,7 @@ impl MasterActor {
     }
 
     /// Takes care of chunks that are marked "to_delete"
-    async fn handle_deletion(&mut self) -> anyhow::Result<()> {
+    async fn handle_chunks_deletion(&mut self) -> anyhow::Result<()> {
         let chunks_with_web = self
             .metadata
             .get_chunks_with_web(
@@ -444,16 +458,19 @@ impl MasterActor {
             chunk_id,
             web,
             file_id,
+            node_active,
             ..
         } in chunks_with_web
         {
             files_to_check.push(file_id);
-            self.node_client
-                .delete_chunk(&chunk_id, &web)
-                .await
-                .with_context(|| {
-                    format!("could not delete chunk from storage node {}", chunk_id)
-                })?;
+            if node_active {
+                self.node_client
+                    .delete_chunk(&chunk_id, &web)
+                    .await
+                    .with_context(|| {
+                        format!("could not delete chunk from storage node {}", chunk_id)
+                    })?;
+            }
 
             // NOTE: in case of errors (and retries) we should eventually delete chunk from the database
             // as node returns 204 in case of non-existing file.
@@ -470,6 +487,31 @@ impl MasterActor {
                 .await?;
             if chunks.is_empty() {
                 self.metadata.delete_file(&file_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Takes care of nodes that are marked "inactive".
+    async fn handle_nodes_deletion(&mut self) -> anyhow::Result<()> {
+        let nodes = self.metadata.get_nodes(Some(false)).await?;
+
+        for node in nodes {
+            let chunks = self
+                .metadata
+                .get_chunks(ChunksQueryBuilder::default().node_id(node.id).build()?)
+                .await?;
+            for chunk in chunks {
+                // mark to deletion, will be done in separate process (handle_chunks_deletion)
+                self.metadata
+                    .update_chunk(
+                        &chunk.id,
+                        ChunkUpdate {
+                            to_delete: Some(true),
+                        },
+                    )
+                    .await?;
             }
         }
 
@@ -626,6 +668,7 @@ mod tests {
                 .get_chunks_with_web(
                     &ChunkWithWebQueryBuilder::default()
                         .file_name("test-file")
+                        .node_active(true)
                         .build()?,
                 )
                 .await?;
@@ -699,6 +742,7 @@ mod tests {
                 .get_chunks_with_web(
                     &ChunkWithWebQueryBuilder::default()
                         .file_name("test-file")
+                        .node_active(true)
                         .to_delete(false)
                         .build()?,
                 )

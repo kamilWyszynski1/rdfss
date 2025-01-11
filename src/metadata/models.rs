@@ -103,6 +103,7 @@ pub struct ChunkWithWeb {
     pub chunk_index: i32,
     pub web: String,
     pub file_id: String,
+    pub node_active: bool,
 }
 
 #[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
@@ -111,6 +112,8 @@ pub struct ChunkWithWebQuery {
     pub file_name: Option<String>,
     #[builder(setter(into, strip_option), default)]
     pub to_delete: Option<bool>,
+    #[builder(setter(into, strip_option), default)]
+    pub node_active: Option<bool>,
 }
 
 #[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
@@ -121,4 +124,6 @@ pub struct ChunksQuery {
     pub active_node: Option<bool>,
     #[builder(setter(into, strip_option), default)]
     pub to_delete: Option<bool>,
+    #[builder(setter(into, strip_option), default)]
+    pub node_id: Option<String>,
 }

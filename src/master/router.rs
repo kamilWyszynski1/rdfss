@@ -68,6 +68,7 @@ async fn get_from_nodes(
         .get_chunks_with_web(
             &ChunkWithWebQueryBuilder::default()
                 .file_name(&file_name)
+                .node_active(true)
                 .build()?,
         )
         .await?;
@@ -214,6 +215,7 @@ async fn delete_from_nodes(mut handler: MasterAppState, file_name: String) -> an
         .get_chunks_with_web(
             &ChunkWithWebQueryBuilder::default()
                 .file_name(&file_name)
+                .node_active(true)
                 .build()?,
         )
         .await?;
