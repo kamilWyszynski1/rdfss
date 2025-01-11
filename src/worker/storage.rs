@@ -49,9 +49,14 @@ impl Storage {
         Ok(File::open(&path).await?)
     }
 
+    /// Removes file from filesystem. If file does not exist, it returns Result::Ok.
     pub async fn delete(&self, file_name: &str) -> anyhow::Result<()> {
         let path = std::path::Path::new(&self.name).join(file_name);
-        tokio::fs::remove_file(&path).await?;
+        if let Err(err) = tokio::fs::remove_file(&path).await {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                bail!(err)
+            }
+        }
         tracing::debug!(file_name = file_name, "deleted file");
         Ok(())
     }

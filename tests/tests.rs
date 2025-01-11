@@ -2,7 +2,9 @@ extern crate diesel_migrations;
 use anyhow;
 use diesel::{Connection, SqliteConnection};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use rdfss::metadata::models::{Chunk, ChunkLocation, ChunkWithWeb, File, Node, NodeUpdate};
+use rdfss::metadata::models::{
+    Chunk, ChunkLocation, ChunkWithWeb, ChunkWithWebQueryBuilder, File, Node, NodeUpdate,
+};
 use rdfss::metadata::sql::MetadataStorage;
 use std::env::temp_dir;
 use std::sync::Arc;
@@ -57,11 +59,13 @@ async fn test_sql() -> anyhow::Result<()> {
                 id: "chunk1".to_string(),
                 file_id: file_id.clone(),
                 chunk_index: 0,
+                to_delete: false,
             },
             Chunk {
                 id: "chunk2".to_string(),
                 file_id: file_id.clone(),
                 chunk_index: 1,
+                to_delete: false,
             },
         ])
         .await?;
@@ -79,7 +83,13 @@ async fn test_sql() -> anyhow::Result<()> {
         ])
         .await?;
 
-    let chunks = storage.get_chunks_with_web("file1").await?;
+    let chunks = storage
+        .get_chunks_with_web(
+            &ChunkWithWebQueryBuilder::default()
+                .file_name("file1")
+                .build()?,
+        )
+        .await?;
     assert_eq!(
         chunks,
         vec![
@@ -97,7 +107,13 @@ async fn test_sql() -> anyhow::Result<()> {
     );
 
     storage.delete_chunk("chunk1").await?;
-    let chunks = storage.get_chunks_with_web("file1").await?;
+    let chunks = storage
+        .get_chunks_with_web(
+            &ChunkWithWebQueryBuilder::default()
+                .file_name("file1")
+                .build()?,
+        )
+        .await?;
     assert_eq!(
         chunks,
         vec![ChunkWithWeb {

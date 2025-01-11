@@ -1,11 +1,10 @@
 use crate::metadata::models::{
-    Chunk, ChunkLocation, ChunkWithWeb, ChunksQuery, File, Node, NodeUpdate,
+    Chunk, ChunkLocation, ChunkUpdate, ChunkWithWeb, ChunkWithWebQuery, ChunksQuery, File,
+    FileUpdate, FilesQuery, Node, NodeUpdate,
 };
 use crate::schema::*;
 use diesel::associations::HasTable;
 use diesel::prelude::*;
-use diesel::query_dsl::InternalJoinDsl;
-use diesel::sqlite::Sqlite;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -41,6 +40,13 @@ impl MetadataStorage {
         Ok(())
     }
 
+    #[tracing::instrument]
+    pub async fn get_file(&mut self, query: &FilesQuery) -> anyhow::Result<File> {
+        Ok(self
+            .run_in_conn(|conn| UOW::new(conn).get_file(query))
+            .await?)
+    }
+
     /// Returns all active nodes.
     #[tracing::instrument]
     pub async fn get_files(&mut self) -> anyhow::Result<Vec<File>> {
@@ -52,6 +58,15 @@ impl MetadataStorage {
     pub async fn delete_file(&mut self, id: &str) -> anyhow::Result<()> {
         self.run_in_conn(|conn| UOW::new(conn).delete_file(id))
             .await
+    }
+
+    #[tracing::instrument]
+    pub async fn file_exists(&mut self, fname: &str) -> anyhow::Result<bool> {
+        let v = self
+            .run_in_conn(|conn| Ok(UOW::new(conn).file_exists(fname)?))
+            .await?;
+        tracing::debug!(v = v, "exists");
+        Ok(v)
     }
 
     #[tracing::instrument]
@@ -102,8 +117,11 @@ impl MetadataStorage {
     }
 
     #[tracing::instrument]
-    pub async fn get_chunks_with_web(&mut self, fname: &str) -> anyhow::Result<Vec<ChunkWithWeb>> {
-        self.run_in_conn(|conn| Ok(UOW::new(conn).get_chunks_with_web(fname)?))
+    pub async fn get_chunks_with_web(
+        &mut self,
+        query: &ChunkWithWebQuery,
+    ) -> anyhow::Result<Vec<ChunkWithWeb>> {
+        self.run_in_conn(|conn| Ok(UOW::new(conn).get_chunks_with_web(query)?))
             .await
     }
 
@@ -120,18 +138,18 @@ impl MetadataStorage {
     }
 
     #[tracing::instrument]
-    pub async fn file_exists(&mut self, fname: &str) -> anyhow::Result<bool> {
-        let v = self
-            .run_in_conn(|conn| Ok(UOW::new(conn).file_exists(fname)?))
-            .await?;
-        tracing::debug!(v = v, "exists");
-        Ok(v)
-    }
-
-    #[tracing::instrument]
     pub async fn save_chunk(&mut self, chunk: Chunk) -> anyhow::Result<()> {
         self.run_in_conn(|conn| {
             UOW::new(conn).save_chunk(chunk)?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tracing::instrument]
+    pub async fn update_chunk(&mut self, id: &str, update: ChunkUpdate) -> anyhow::Result<()> {
+        self.run_in_conn(|conn| {
+            UOW::new(conn).update_chunk(id, update)?;
             Ok(())
         })
         .await
@@ -214,8 +232,27 @@ impl<'a> UOW<'a> {
         Ok(())
     }
 
+    pub fn get_file(&mut self, fq: &FilesQuery) -> anyhow::Result<File> {
+        let mut query = files::table.into_boxed();
+        if let Some(file_name) = &fq.name {
+            query = query.filter(files::name.eq(file_name))
+        }
+        if let Some(to_delete) = &fq.to_delete {
+            query = query.filter(files::to_delete.eq(to_delete))
+        }
+
+        Ok(query.get_result(self.conn)?)
+    }
+
     pub fn get_files(&mut self) -> anyhow::Result<Vec<File>> {
         Ok(files::table.load(self.conn)?)
+    }
+
+    pub fn update_file(&mut self, id: &str, update: &FileUpdate) -> anyhow::Result<()> {
+        diesel::update(files::table.find(id))
+            .set(update)
+            .execute(self.conn)?;
+        Ok(())
     }
 
     pub fn delete_file(&mut self, id: &str) -> anyhow::Result<()> {
@@ -226,6 +263,13 @@ impl<'a> UOW<'a> {
     pub fn delete_file_by_name(&mut self, name: &str) -> anyhow::Result<()> {
         diesel::delete(files::table.filter(files::name.eq(name))).execute(self.conn)?;
         Ok(())
+    }
+
+    pub fn file_exists(&mut self, fname: &str) -> anyhow::Result<bool> {
+        Ok(diesel::select(diesel::dsl::exists(
+            files::table.filter(files::name.eq(fname)),
+        ))
+        .get_result(self.conn)?)
     }
 
     pub fn save_node(&mut self, node: Node) -> anyhow::Result<()> {
@@ -265,10 +309,6 @@ impl<'a> UOW<'a> {
     }
 
     pub fn get_chunks(&mut self, chunks_query: ChunksQuery) -> anyhow::Result<Vec<Chunk>> {
-        let mut query = chunks::table.into_boxed();
-        if let Some(id) = &chunks_query.file_id {
-            query = query.filter(chunks::file_id.eq(id))
-        }
         if let Some(active) = &chunks_query.active_node {
             let mut joined = chunk_locations::table
                 .inner_join(chunks::table)
@@ -276,25 +316,52 @@ impl<'a> UOW<'a> {
                 .select(chunks::all_columns)
                 .filter(nodes::active.eq(active))
                 .into_boxed();
+
             if let Some(id) = &chunks_query.file_id {
                 joined = joined.filter(chunks::file_id.eq(id))
             }
+            if let Some(to_delete) = &chunks_query.to_delete {
+                joined = joined.filter(chunks::to_delete.eq(to_delete))
+            }
             return Ok(joined.load(self.conn)?);
+        }
+
+        let mut query = chunks::table.into_boxed();
+        if let Some(id) = &chunks_query.file_id {
+            query = query.filter(chunks::file_id.eq(id))
+        }
+        if let Some(to_delete) = &chunks_query.to_delete {
+            query = query.filter(chunks::to_delete.eq(to_delete))
         }
 
         Ok(query.load(self.conn)?)
     }
 
-    pub fn get_chunks_with_web(&mut self, fname: &str) -> anyhow::Result<Vec<ChunkWithWeb>> {
-        let a: Vec<ChunkWithWeb> = chunk_locations::table
+    pub fn get_chunks_with_web(
+        &mut self,
+        query: &ChunkWithWebQuery,
+    ) -> anyhow::Result<Vec<ChunkWithWeb>> {
+        let mut boxed = chunk_locations::table
             .inner_join(nodes::table)
             .inner_join(chunks::table)
             .inner_join(files::table.on(chunks::file_id.eq(files::id)))
-            .filter(files::name.eq(fname))
             .filter(nodes::active.eq(true))
-            .select((chunk_locations::chunk_id, chunks::chunk_index, nodes::web))
-            .load(self.conn)?;
-        Ok(a)
+            .select((
+                chunk_locations::chunk_id,
+                chunks::chunk_index,
+                nodes::web,
+                files::id,
+            ))
+            .into_boxed();
+
+        if let Some(fname) = &query.file_name {
+            boxed = boxed.filter(files::name.eq(fname));
+        }
+        if let Some(to_delete) = &query.to_delete {
+            boxed = boxed.filter(chunks::to_delete.eq(to_delete));
+        }
+
+        Ok(boxed.load(self.conn)?)
     }
 
     pub fn get_chunk_id_by_index_and_node(
@@ -310,16 +377,16 @@ impl<'a> UOW<'a> {
             .get_result(self.conn)?)
     }
 
-    pub fn file_exists(&mut self, fname: &str) -> anyhow::Result<bool> {
-        Ok(diesel::select(diesel::dsl::exists(
-            files::table.filter(files::name.eq(fname)),
-        ))
-        .get_result(self.conn)?)
-    }
-
     pub fn save_chunk(&mut self, chunk: Chunk) -> anyhow::Result<()> {
         diesel::insert_into(chunks::table)
             .values(&chunk)
+            .execute(self.conn)?;
+        Ok(())
+    }
+
+    pub fn update_chunk(&mut self, id: &str, update: ChunkUpdate) -> anyhow::Result<()> {
+        diesel::update(chunks::table.find(id))
+            .set(&update)
             .execute(self.conn)?;
         Ok(())
     }

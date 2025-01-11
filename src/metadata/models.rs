@@ -11,6 +11,7 @@ pub struct File {
     pub created_at: NaiveDateTime,
     pub modified_at: NaiveDateTime,
     pub replication_factor: i32, // database default is 3
+    pub to_delete: bool,
 }
 
 impl File {
@@ -21,8 +22,24 @@ impl File {
             created_at: Utc::now().naive_utc(),
             modified_at: Utc::now().naive_utc(),
             replication_factor: 3,
+            to_delete: false,
         }
     }
+}
+
+#[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
+pub struct FilesQuery {
+    #[builder(setter(into, strip_option), default)]
+    pub name: Option<String>,
+    #[builder(setter(into, strip_option), default)]
+    pub to_delete: Option<bool>,
+}
+
+#[derive(AsChangeset, Debug)]
+#[diesel(table_name = crate::schema::files)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct FileUpdate {
+    pub to_delete: Option<bool>,
 }
 
 #[derive(Queryable, Identifiable, Insertable, Selectable, PartialEq, Debug, Clone)]
@@ -49,6 +66,25 @@ pub struct Chunk {
     pub id: String,
     pub file_id: String,
     pub chunk_index: i32,
+    pub to_delete: bool,
+}
+
+impl Chunk {
+    pub fn new(id: String, file_id: String, chunk_index: i32) -> Self {
+        Self {
+            id,
+            file_id,
+            chunk_index,
+            to_delete: false,
+        }
+    }
+}
+
+#[derive(AsChangeset, Debug)]
+#[diesel(table_name = crate::schema::chunks)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ChunkUpdate {
+    pub to_delete: Option<bool>,
 }
 
 #[derive(Queryable, Insertable, Selectable, Associations, Debug, PartialEq, Clone)]
@@ -66,6 +102,15 @@ pub struct ChunkWithWeb {
     pub chunk_id: String,
     pub chunk_index: i32,
     pub web: String,
+    pub file_id: String,
+}
+
+#[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
+pub struct ChunkWithWebQuery {
+    #[builder(setter(into, strip_option), default)]
+    pub file_name: Option<String>,
+    #[builder(setter(into, strip_option), default)]
+    pub to_delete: Option<bool>,
 }
 
 #[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
@@ -74,4 +119,6 @@ pub struct ChunksQuery {
     pub file_id: Option<String>,
     #[builder(setter(into, strip_option), default)]
     pub active_node: Option<bool>,
+    #[builder(setter(into, strip_option), default)]
+    pub to_delete: Option<bool>,
 }

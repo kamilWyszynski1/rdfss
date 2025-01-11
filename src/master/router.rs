@@ -1,6 +1,8 @@
 use crate::master::node_client::{HTTPNodeClient, NodeClient};
 use crate::metadata::models;
-use crate::metadata::models::File;
+use crate::metadata::models::{
+    ChunkUpdate, ChunkWithWebQueryBuilder, File, FileUpdate, FilesQueryBuilder,
+};
 use crate::metadata::sql::MetadataStorage;
 use crate::web::AppError;
 use anyhow::{bail, Context};
@@ -9,7 +11,6 @@ use axum::body::{Body, BodyDataStream};
 use axum::extract::{Path, Request, State};
 use axum::routing::{delete, get, post};
 use axum::Router;
-use chrono::NaiveDateTime;
 use futures::TryStreamExt;
 use rand::seq::IteratorRandom;
 use std::io;
@@ -62,7 +63,14 @@ async fn get_from_nodes(
     mut handler: MasterAppState,
     file_name: String,
 ) -> anyhow::Result<axum::body::Body> {
-    let file_info = handler.metadata.get_chunks_with_web(&file_name).await?;
+    let file_info = handler
+        .metadata
+        .get_chunks_with_web(
+            &ChunkWithWebQueryBuilder::default()
+                .file_name(&file_name)
+                .build()?,
+        )
+        .await?;
 
     tracing::debug!(chunks = format!("{:?}", file_info), "found file chunks");
 
@@ -149,13 +157,18 @@ async fn stream_to_nodes(
                 .send_chunk(&chunk_id, &node.web, buffer)
                 .await
                 .context(format!("could not send chunk to {} node", node.id))?;
-            tracing::info!(file = chunk_id, node = node.id, "file chunk sent");
+            tracing::info!(
+                file = filename,
+                chunk_id = chunk_id,
+                node = node.id,
+                "file chunk sent"
+            );
 
-            chunks.push(models::Chunk {
-                file_id: file_id.clone(),
-                id: chunk_id.clone(),
+            chunks.push(models::Chunk::new(
+                chunk_id.clone(),
+                file_id.clone(),
                 chunk_index,
-            });
+            ));
             chunk_locations.push(models::ChunkLocation {
                 chunk_id,
                 node_id: node.id.to_string(),
@@ -177,7 +190,8 @@ async fn stream_to_nodes(
                 uow.save_chunk_locations(chunk_locations)?;
                 Ok(())
             })
-            .await?;
+            .await
+            .context("could not save file, chunks and locations")?;
 
         anyhow::Ok(())
     }
@@ -195,24 +209,45 @@ async fn delete_file(
 }
 
 async fn delete_from_nodes(mut handler: MasterAppState, file_name: String) -> anyhow::Result<()> {
-    let chunks = handler.metadata.get_chunks_with_web(&file_name).await?;
+    let chunks = handler
+        .metadata
+        .get_chunks_with_web(
+            &ChunkWithWebQueryBuilder::default()
+                .file_name(&file_name)
+                .build()?,
+        )
+        .await?;
     if chunks.is_empty() {
         return Ok(());
     }
 
-    // TODO: refactor to use outbox pattern
-    for ch in chunks {
-        handler
-            .node_client
-            .delete_chunk(&ch.chunk_id, &ch.web)
-            .await
-            .context("could not delete chunk from node")?;
-        handler
-            .metadata
-            .delete_chunk(&ch.chunk_id)
-            .await
-            .context("could not delete chunk from the metadata db")?;
-    }
-    handler.metadata.delete_file_by_name(&file_name).await?;
+    let file = handler
+        .metadata
+        .get_file(&FilesQueryBuilder::default().name(&file_name).build()?)
+        .await?;
+
+    handler
+        .metadata
+        .tx(|uow| {
+            for ch in chunks {
+                uow.update_chunk(
+                    &ch.chunk_id,
+                    ChunkUpdate {
+                        to_delete: Some(true),
+                    },
+                )
+                .context("could not mark chunk to delete")?;
+            }
+
+            uow.update_file(
+                &file.id,
+                &FileUpdate {
+                    to_delete: Some(true),
+                },
+            )
+            .context("could not mark file to delete")?;
+            Ok(())
+        })
+        .await?;
     Ok(())
 }

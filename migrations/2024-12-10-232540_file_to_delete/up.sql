@@ -1,0 +1,3 @@
+-- Your SQL goes here
+ALTER TABLE files
+    ADD COLUMN to_delete BOOLEAN NOT NULL DEFAULT FALSE;

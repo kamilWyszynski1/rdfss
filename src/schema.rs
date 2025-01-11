@@ -13,6 +13,7 @@ diesel::table! {
         id -> Text,
         file_id -> Text,
         chunk_index -> Integer,
+        to_delete -> Bool,
     }
 }
 
@@ -23,6 +24,7 @@ diesel::table! {
         created_at -> Timestamp,
         modified_at -> Timestamp,
         replication_factor -> Integer,
+        to_delete -> Bool,
     }
 }
 

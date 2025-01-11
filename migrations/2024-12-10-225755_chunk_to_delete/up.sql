@@ -1,0 +1,3 @@
+-- Your SQL goes here
+ALTER TABLE chunks
+    ADD COLUMN to_delete BOOLEAN NOT NULL DEFAULT FALSE;

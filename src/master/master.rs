@@ -1,6 +1,9 @@
 use crate::master::consul::{Consul, Wrap};
 use crate::master::node_client::{HTTPNodeClient, NodeClient};
-use crate::metadata::models::{Chunk, ChunkLocation, ChunksQueryBuilder, File, Node, NodeUpdate};
+use crate::metadata::models::{
+    Chunk, ChunkLocation, ChunkUpdate, ChunkWithWeb, ChunkWithWebQuery, ChunkWithWebQueryBuilder,
+    ChunksQueryBuilder, File, Node, NodeUpdate,
+};
 use crate::metadata::sql::MetadataStorage;
 use crate::worker::router::{Order, ReplicationOrder};
 use anyhow::Context;
@@ -8,7 +11,6 @@ use consulrs::api::service::common::{AgentService, AgentServiceChecksInfo};
 use consulrs::api::ApiResponse;
 use consulrs::client::ConsulClient;
 use consulrs::error::ClientError;
-use diesel::Identifiable;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
@@ -56,7 +58,8 @@ impl Master {
         tokio::spawn(run_master_actor(actor, cancellation_token.clone()));
 
         let mut health_interval = tokio::time::interval(health_interval);
-        let mut chunks_check_interval = tokio::time::interval(Duration::from_secs(5));
+        let mut chunks_check_interval = tokio::time::interval(Duration::from_secs(5)); // TODO: set from main
+        let mut delete_marked_interval = tokio::time::interval(Duration::from_secs(5)); // TODO: set from main
 
         tokio::spawn(async move {
             loop {
@@ -68,6 +71,11 @@ impl Master {
                     }
                     _ = chunks_check_interval.tick() => {
                         if let Err(err) = sender.send(MasterActorMessage::Chunks).await {
+                            tracing::error!(err=format!("{}", err), "could not send message");
+                        }
+                    }
+                    _ = delete_marked_interval.tick() => {
+                         if let Err(err) = sender.send(MasterActorMessage::DeleteMarkedChunks).await {
                             tracing::error!(err=format!("{}", err), "could not send message");
                         }
                     }
@@ -101,6 +109,10 @@ struct MasterActor {
 enum MasterActorMessage {
     Health, // check workers health status form consul
     Chunks, // check if chunks' replication factor is met
+
+    // Query chunks that are marked "to_delete" and call proper nodes to remove data.
+    // If every piece was deleted set proper state in metadata db.
+    DeleteMarkedChunks,
 }
 
 impl MasterActor {
@@ -128,6 +140,7 @@ impl MasterActor {
         match msg {
             MasterActorMessage::Health => self.handle_health().await,
             MasterActorMessage::Chunks => self.handle_chunks().await,
+            MasterActorMessage::DeleteMarkedChunks => self.handle_deletion().await,
         }
     }
 
@@ -215,7 +228,11 @@ impl MasterActor {
 
             let locations = self
                 .metadata
-                .get_chunks_with_web(&file.name)
+                .get_chunks_with_web(
+                    &ChunkWithWebQueryBuilder::default()
+                        .file_name(&file.name)
+                        .build()?,
+                )
                 .await
                 .context("could not get chunk locations")?;
 
@@ -230,7 +247,7 @@ impl MasterActor {
 
             // file_id -> chunk_index -> count
             let mut m = HashMap::new();
-            for chunk in chunks {
+            for chunk in &chunks {
                 m.entry(chunk.chunk_index)
                     .and_modify(|(count, _c)| *count += 1)
                     .or_insert((1, chunk.clone()));
@@ -260,7 +277,7 @@ impl MasterActor {
                             chunk_index,
                             (replication_level - file.replication_factor) as usize,
                             &file,
-                            &chunk_locations,
+                            &chunks,
                         )
                         .await
                     {
@@ -341,11 +358,11 @@ impl MasterActor {
 
             self.metadata
                 .tx(|uow| {
-                    uow.save_chunk(Chunk {
+                    uow.save_chunk(Chunk::new(
+                        new_chunk_id.clone(),
+                        file.id.clone(),
                         chunk_index,
-                        id: new_chunk_id.clone(),
-                        file_id: file.id.clone(),
-                    })?;
+                    ))?;
                     uow.save_chunk_location(ChunkLocation {
                         chunk_id: new_chunk_id.clone(),
                         node_id: node.id,
@@ -376,7 +393,7 @@ impl MasterActor {
         chunk_index: i32,
         redundant: usize,
         file: &File,
-        chunk_locations: &HashMap<i32, Vec<String>>,
+        chunks: &[Chunk],
     ) -> anyhow::Result<()> {
         tracing::debug!(
             chunk_index = chunk_index,
@@ -384,31 +401,76 @@ impl MasterActor {
             redundant = redundant,
             "replication level too high, deleting redundant replicas");
 
-        // pick nodes that contains wanted chunk_index
-        let picked_node_webs = match chunk_locations.get(&chunk_index) {
-            Some(v) => v,
-            None => {
-                tracing::error!(
-                    chunk_index = chunk_index,
-                    file = ?file,
-                    "could not get node with given chunk index",
-                );
-                return Ok(());
-            }
-        };
-        let picked_node_webs = &picked_node_webs[..redundant.min(picked_node_webs.len())] // delete only those that we need
+        dbg!(chunk_index);
+
+        let picked: Vec<&Chunk> = chunks
+            .iter()
+            .filter(|c| c.chunk_index == chunk_index && c.file_id == file.id)
+            .collect();
+        let picked = &picked[..redundant.min(picked.len())] // delete only those that we need
             .to_vec();
 
-        for node_web in picked_node_webs {
-            let chunk_id = self
-                .metadata
-                .get_chunk_id_by_index_and_node(chunk_index, &node_web)
-                .await?;
-            self.metadata.delete_chunk(&chunk_id).await?;
+        dbg!(&picked);
+
+        for ch in picked {
+            dbg!(&ch.id);
+            self.metadata
+                .update_chunk(
+                    &ch.id,
+                    ChunkUpdate {
+                        to_delete: Some(true),
+                    },
+                )
+                .await?; // mark for async deletion
+        }
+
+        Ok(())
+    }
+
+    /// Takes care of chunks that are marked "to_delete"
+    async fn handle_deletion(&mut self) -> anyhow::Result<()> {
+        let chunks_with_web = self
+            .metadata
+            .get_chunks_with_web(
+                &ChunkWithWebQueryBuilder::default()
+                    .to_delete(true)
+                    .build()?,
+            )
+            .await
+            .context("could not get chunks")?;
+
+        let mut files_to_check = vec![];
+        for ChunkWithWeb {
+            chunk_id,
+            web,
+            file_id,
+            ..
+        } in chunks_with_web
+        {
+            files_to_check.push(file_id);
             self.node_client
-                .delete_chunk(&chunk_id, &node_web)
+                .delete_chunk(&chunk_id, &web)
                 .await
-                .context("could not delete chunk")?;
+                .with_context(|| {
+                    format!("could not delete chunk from storage node {}", chunk_id)
+                })?;
+
+            // NOTE: in case of errors (and retries) we should eventually delete chunk from the database
+            // as node returns 204 in case of non-existing file.
+            self.metadata
+                .delete_chunk(&chunk_id)
+                .await
+                .context("could not delete chunk from metadata db")?;
+        }
+
+        for file_id in files_to_check {
+            let chunks = self
+                .metadata
+                .get_chunks(ChunksQueryBuilder::default().file_id(&file_id).build()?)
+                .await?;
+            if chunks.is_empty() {
+                self.metadata.delete_file(&file_id).await?;
+            }
         }
 
         Ok(())
@@ -560,7 +622,13 @@ mod tests {
             assert_eq!(mapped.get(&1), Some(&2));
         }
         {
-            let locations = storage.get_chunks_with_web("test-file").await?;
+            let locations = storage
+                .get_chunks_with_web(
+                    &ChunkWithWebQueryBuilder::default()
+                        .file_name("test-file")
+                        .build()?,
+                )
+                .await?;
             assert_eq!(locations.len(), 4);
             let mapped = locations
                 .into_iter()
@@ -616,11 +684,25 @@ mod tests {
 
         // assert changes
         {
-            let chunks = storage.get_chunks(ChunksQuery::default()).await?;
+            let chunks = storage
+                .get_chunks(
+                    ChunksQueryBuilder::default()
+                        .to_delete(false)
+                        .build()
+                        .unwrap(),
+                )
+                .await?;
             assert_eq!(chunks.len(), 1);
         }
         {
-            let locations = storage.get_chunks_with_web("test-file").await?;
+            let locations = storage
+                .get_chunks_with_web(
+                    &ChunkWithWebQueryBuilder::default()
+                        .file_name("test-file")
+                        .to_delete(false)
+                        .build()?,
+                )
+                .await?;
             assert_eq!(locations.len(), 1);
         }
 
@@ -670,6 +752,7 @@ mod tests {
                 created_at: NaiveDateTime::default(),
                 modified_at: NaiveDateTime::default(),
                 name: "test-file".to_string(),
+                to_delete: false,
             })
             .await?;
         storage
@@ -691,16 +774,8 @@ mod tests {
 
         storage
             .save_chunks(vec![
-                Chunk {
-                    id: "chunk1".to_string(),
-                    file_id: fid.clone(),
-                    chunk_index: 0,
-                },
-                Chunk {
-                    id: "chunk2".to_string(),
-                    file_id: fid.clone(),
-                    chunk_index: 1,
-                },
+                Chunk::new("chunk1".to_string(), fid.clone(), 0),
+                Chunk::new("chunk2".to_string(), fid.clone(), 1),
             ])
             .await?;
 
@@ -733,6 +808,7 @@ mod tests {
                 created_at: NaiveDateTime::default(),
                 modified_at: NaiveDateTime::default(),
                 name: "test-file".to_string(),
+                to_delete: false,
             })
             .await?;
         storage
@@ -754,21 +830,9 @@ mod tests {
 
         storage
             .save_chunks(vec![
-                Chunk {
-                    id: "chunk1".to_string(),
-                    file_id: fid.clone(),
-                    chunk_index: 0,
-                },
-                Chunk {
-                    id: "chunk2".to_string(),
-                    file_id: fid.clone(),
-                    chunk_index: 0,
-                },
-                Chunk {
-                    id: "chunk3".to_string(),
-                    file_id: fid.clone(),
-                    chunk_index: 0,
-                },
+                Chunk::new("chunk1".to_string(), fid.clone(), 0),
+                Chunk::new("chunk2".to_string(), fid.clone(), 0),
+                Chunk::new("chunk3".to_string(), fid.clone(), 0),
             ])
             .await?;
 
