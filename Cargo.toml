@@ -36,6 +36,7 @@ consulrs = "0.1.0"
 prost = "0.13.3"
 chrono = "0.4.38"
 derive_builder = "0.20.2"
+reed-solomon-erasure = "6.0.0"
 
 [build-dependencies]
 tonic-build = "0.12.3"

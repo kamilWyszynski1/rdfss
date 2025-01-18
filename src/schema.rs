@@ -14,6 +14,7 @@ diesel::table! {
         file_id -> Text,
         chunk_index -> Integer,
         to_delete -> Bool,
+        parity_shard -> Bool,
     }
 }
 

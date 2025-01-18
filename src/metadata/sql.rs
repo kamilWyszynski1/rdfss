@@ -326,6 +326,9 @@ impl<'a> UOW<'a> {
             if let Some(node_id) = &chunks_query.node_id {
                 joined = joined.filter(nodes::id.eq(node_id))
             }
+            if let Some(parity_shard) = &chunks_query.parity_shard {
+                joined = joined.filter(chunks::parity_shard.eq(parity_shard))
+            }
             return Ok(joined.load(self.conn)?);
         } else if let Some(node_id) = &chunks_query.node_id {
             let mut joined = chunk_locations::table
@@ -340,6 +343,9 @@ impl<'a> UOW<'a> {
             }
             if let Some(to_delete) = &chunks_query.to_delete {
                 joined = joined.filter(chunks::to_delete.eq(to_delete))
+            }
+            if let Some(parity_shard) = &chunks_query.parity_shard {
+                joined = joined.filter(chunks::parity_shard.eq(parity_shard))
             }
             return Ok(joined.load(self.conn)?);
         }
@@ -369,6 +375,7 @@ impl<'a> UOW<'a> {
                 nodes::web,
                 files::id,
                 nodes::active,
+                chunks::parity_shard,
             ))
             .into_boxed();
 
@@ -380,6 +387,9 @@ impl<'a> UOW<'a> {
         }
         if let Some(node_active) = &query.node_active {
             boxed = boxed.filter(nodes::active.eq(node_active));
+        }
+        if let Some(parity_shard) = &query.parity_shard {
+            boxed = boxed.filter(chunks::parity_shard.eq(parity_shard));
         }
 
         Ok(boxed.load(self.conn)?)

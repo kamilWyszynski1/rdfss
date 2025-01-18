@@ -67,6 +67,7 @@ pub struct Chunk {
     pub file_id: String,
     pub chunk_index: i32,
     pub to_delete: bool,
+    pub parity_shard: bool,
 }
 
 impl Chunk {
@@ -76,7 +77,13 @@ impl Chunk {
             file_id,
             chunk_index,
             to_delete: false,
+            parity_shard: false,
         }
+    }
+
+    pub fn with_parity_shard(mut self) -> Self {
+        self.parity_shard = true;
+        self
     }
 }
 
@@ -104,6 +111,7 @@ pub struct ChunkWithWeb {
     pub web: String,
     pub file_id: String,
     pub node_active: bool,
+    pub parity_shard: bool,
 }
 
 #[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
@@ -114,6 +122,8 @@ pub struct ChunkWithWebQuery {
     pub to_delete: Option<bool>,
     #[builder(setter(into, strip_option), default)]
     pub node_active: Option<bool>,
+    #[builder(setter(into, strip_option), default)]
+    pub parity_shard: Option<bool>,
 }
 
 #[derive(Builder, Debug, Default, Clone, Queryable, PartialEq)]
@@ -126,4 +136,6 @@ pub struct ChunksQuery {
     pub to_delete: Option<bool>,
     #[builder(setter(into, strip_option), default)]
     pub node_id: Option<String>,
+    #[builder(setter(into, strip_option), default)]
+    pub parity_shard: Option<bool>,
 }

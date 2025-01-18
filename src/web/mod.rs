@@ -28,6 +28,12 @@ impl IntoResponse for AppError {
                         error: "File already exists".to_string(),
                     }),
                 ),
+                MasterAppError::InvalidContentLength => (
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                        error: "Invalid content-length header".to_string(),
+                    }),
+                ),
             },
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
