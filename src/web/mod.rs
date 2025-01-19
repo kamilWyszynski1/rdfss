@@ -34,6 +34,13 @@ impl IntoResponse for AppError {
                         error: "Invalid content-length header".to_string(),
                     }),
                 ),
+
+                MasterAppError::FileNotFound => (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "File not found".to_string(),
+                    }),
+                ),
             },
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

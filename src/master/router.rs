@@ -1,7 +1,8 @@
-use crate::master::node_client::{HTTPNodeClient, NodeClient};
+use crate::master::node_client::NodeClient;
+use crate::master::router::MasterAppError::FileNotFound;
 use crate::metadata::models;
 use crate::metadata::models::{
-    ChunkUpdate, ChunkWithWebQueryBuilder, File, FileUpdate, FilesQueryBuilder,
+    ChunkUpdate, ChunkWithWeb, ChunkWithWebQueryBuilder, File, FileUpdate, FilesQueryBuilder,
 };
 use crate::metadata::sql::MetadataStorage;
 use crate::web::AppError;
@@ -15,15 +16,13 @@ use axum::Router;
 use futures::TryStreamExt;
 use rand::seq::IteratorRandom;
 use reed_solomon_erasure::galois_8::ReedSolomon;
-use reed_solomon_erasure::{shards, ShardByShard};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::StreamReader;
-use tracing_subscriber::fmt::format;
 
 #[derive(Error, Debug)]
 pub(crate) enum MasterAppError {
@@ -32,6 +31,9 @@ pub(crate) enum MasterAppError {
 
     #[error("invalid content-length")]
     InvalidContentLength,
+
+    #[error("file not found")]
+    FileNotFound,
 }
 
 const CHUNK_SIZE: usize = 1 * 1024;
@@ -109,11 +111,15 @@ async fn get_from_nodes(
     Ok(Body::from_stream(s))
 }
 
+/// It queries real chunks and parity shard locations and fetches them all, simulates lost data chunk
+/// and reconstructs the data using parity shards.
+/// It should be implemented as a part of get_from_nodes function,
+/// but it's good enough to showcase capability like this.
 async fn get_from_nodes_error_correction(
     mut handler: MasterAppState,
     file_name: String,
 ) -> anyhow::Result<axum::body::Body> {
-    let mut file_info = handler
+    let chunks_with_webs = handler
         .metadata
         .get_chunks_with_web(
             &ChunkWithWebQueryBuilder::default()
@@ -123,26 +129,23 @@ async fn get_from_nodes_error_correction(
         )
         .await?;
 
-    file_info.sort_by(|a, b| {
-        if a.parity_shard {
-            Ordering::Greater
-        } else if b.parity_shard {
-            Ordering::Greater
-        } else {
-            a.chunk_index.cmp(&b.chunk_index)
-        }
-    });
-    let len = file_info.len();
+    if chunks_with_webs.is_empty() {
+        bail!(FileNotFound)
+    }
+
+    let chunks = deduplicate_chunks_for_reconstruct(chunks_with_webs);
+    let len = chunks.len();
 
     let mut shards = Vec::with_capacity(len);
-    for fi in file_info {
+    dbg!(&chunks);
+    for fi in chunks {
         let chunk = handler.node_client.get_chunk(&fi.chunk_id, &fi.web).await?;
-        // dbg!(chunk.len(), fi.parity_shard);
+        println!("read {:?}", chunk[..2].to_vec());
+        dbg!(fi.chunk_index, chunk.len(), fi.parity_shard);
         shards.push(Some(chunk));
     }
 
     let mut rollback_fillings = HashMap::new();
-
     for i in 0..len - 2 {
         if let Some(shard) = &mut shards[i] {
             if shard.len() < CHUNK_SIZE {
@@ -153,9 +156,10 @@ async fn get_from_nodes_error_correction(
         }
     }
 
-    shards[1] = None;
-    let r = ReedSolomon::new(len - 2, PARITY_SHARDS_AMOUNT)?;
-    r.reconstruct(&mut shards)?;
+    shards[2] = None;
+    shards[1] = None; // simulate lost shard
+    let r = ReedSolomon::new(len - PARITY_SHARDS_AMOUNT, PARITY_SHARDS_AMOUNT)?;
+    r.reconstruct_data(&mut shards)?;
 
     let mut data = Vec::new();
     for i in 0..len - 2 {
@@ -169,9 +173,41 @@ async fn get_from_nodes_error_correction(
     Ok(Body::from(data))
 }
 
+fn deduplicate_chunks_for_reconstruct(chunks: Vec<ChunkWithWeb>) -> Vec<ChunkWithWeb> {
+    dbg!(&chunks);
+    let mut res = vec![];
+    let mut deduplicated = HashMap::new();
+
+    chunks.into_iter().for_each(|chunk| {
+        if chunk.parity_shard {
+            res.push(chunk);
+        } else {
+            deduplicated.insert(chunk.chunk_index, chunk);
+        }
+    });
+
+    deduplicated
+        .into_values()
+        .into_iter()
+        .for_each(|ch| res.push(ch));
+
+    res.sort_by(|a, b| {
+        if a.parity_shard && b.parity_shard {
+            b.chunk_index.cmp(&a.chunk_index)
+        } else if a.parity_shard {
+            Ordering::Less
+        } else if b.parity_shard {
+            Ordering::Less
+        } else {
+            a.chunk_index.cmp(&b.chunk_index)
+        }
+    });
+    res
+}
+
 // Handler that streams the request body to a file.
 //
-// POST'ing to `/file/foo.txt` will create a file called `foo.txt`.
+// POST'ing to `/file/foo.txt` creates a file called `foo.txt`.
 async fn upload_file(
     State(state): State<MasterAppState>,
     headers: HeaderMap,
@@ -258,6 +294,8 @@ async fn stream_to_nodes(
                 break;
             }
 
+            println!("write {:?}", buffer[..2].to_vec());
+
             {
                 let buffer_len = buffer.len();
                 fill_buffer_with_padding(&mut buffer);
@@ -293,13 +331,15 @@ async fn stream_to_nodes(
                 node_id: node.id.to_string(),
             });
 
-            // our reader is now exhausted, but that doesn't mean the underlying reader
-            // is. So we recover it, and we create the next chunked reader.
+            // the reader is now exhausted, but that doesn't mean the underlying reader
+            // ism recover it, and create the next chunked reader.
             reader = reader.into_inner().take(CHUNK_SIZE as u64);
             chunk_index += 1;
         }
 
+        let mut parity_index = -1;
         for parity in &mut parities {
+            println!("write {:?}", parity[..2].to_vec());
             let node = pick_random_node()?;
             let chunk_parity_shard_id = uuid::Uuid::new_v4().to_string();
 
@@ -310,13 +350,14 @@ async fn stream_to_nodes(
                 .context(format!("could not send chunk to {} node", node.id))?;
 
             chunks.push(
-                models::Chunk::new(chunk_parity_shard_id.clone(), file_id.clone(), 0)
+                models::Chunk::new(chunk_parity_shard_id.clone(), file_id.clone(), parity_index)
                     .with_parity_shard(),
             );
             chunk_locations.push(models::ChunkLocation {
                 chunk_id: chunk_parity_shard_id,
                 node_id: node.id.to_string(),
             });
+            parity_index -= 1;
         }
 
         tracing::debug!(chunks = format!("{:?}", chunks), "saving chunks info");
