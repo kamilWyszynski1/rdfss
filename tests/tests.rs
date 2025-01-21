@@ -60,12 +60,14 @@ async fn test_sql() -> anyhow::Result<()> {
                 file_id: file_id.clone(),
                 chunk_index: 0,
                 to_delete: false,
+                parity_shard: false,
             },
             Chunk {
                 id: "chunk2".to_string(),
                 file_id: file_id.clone(),
                 chunk_index: 1,
                 to_delete: false,
+                parity_shard: false,
             },
         ])
         .await?;
@@ -97,12 +99,18 @@ async fn test_sql() -> anyhow::Result<()> {
             ChunkWithWeb {
                 chunk_id: "chunk1".to_string(),
                 web: "localhost:3001".to_string(),
+                file_id: file_id.clone(),
                 chunk_index: 0,
+                parity_shard: false,
+                node_active: true,
             },
             ChunkWithWeb {
                 chunk_id: "chunk2".to_string(),
                 web: "localhost:3002".to_string(),
+                file_id: file_id.clone(),
                 chunk_index: 1,
+                parity_shard: false,
+                node_active: true,
             }
         ]
     );
@@ -121,7 +129,10 @@ async fn test_sql() -> anyhow::Result<()> {
         vec![ChunkWithWeb {
             chunk_id: "chunk2".to_string(),
             web: "localhost:3002".to_string(),
+            file_id: file_id.clone(),
+            node_active: true,
             chunk_index: 1,
+            parity_shard: false,
         }]
     );
 

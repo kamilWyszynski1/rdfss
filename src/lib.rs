@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate derive_builder;
+extern crate reed_solomon_erasure;
 pub mod master;
 pub mod metadata;
 mod schema;

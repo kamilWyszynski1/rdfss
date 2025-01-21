@@ -17,7 +17,7 @@ pub fn init_tracing() {
         .with(
             fmt::layer()
                 .pretty()
-                .with_filter(filter::LevelFilter::from(tracing::Level::DEBUG))
+                .with_filter(filter::LevelFilter::from(tracing::Level::INFO))
                 .with_filter(filter),
         )
         .init();

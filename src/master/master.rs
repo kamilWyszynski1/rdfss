@@ -86,7 +86,7 @@ impl Master {
                          }
                     }
                     _ = cancellation_token.cancelled() => {
-                        tracing::info!("closing master");
+                        tracing::debug!("closing master");
                         return;
                     }
                 }
@@ -179,7 +179,7 @@ impl MasterActor {
                             },
                         )
                         .await?;
-                    tracing::info!(name = name, "unhealthy worker node unregistered");
+                    tracing::debug!(name = name, "unhealthy worker node unregistered");
 
                     // mark worker node as unhealthy
                     let _ = self.unhealthy_broadcast.send(name.clone());
@@ -197,7 +197,7 @@ impl MasterActor {
 
         // TODO: implement logic for node with data coming back to life
 
-        tracing::info!(node=%node, "reconciling node");
+        tracing::debug!(node=%node, "reconciling node");
 
         self.metadata
             .save_node(Node {
@@ -216,7 +216,7 @@ impl MasterActor {
     /// we check every chunk_index replication level, if it's below file's replication
     /// factor, replication is ordered.
     async fn handle_chunks(&mut self) -> anyhow::Result<()> {
-        tracing::info!("starting handle chunks");
+        tracing::debug!("starting handle chunks");
         // TODO: pagination
         let files = self
             .metadata
@@ -227,14 +227,15 @@ impl MasterActor {
         let nodes = self.metadata.get_nodes(Some(true)).await?;
 
         for file in files {
-            tracing::info!(file = ?file, "checking file replication level");
-            // check replication factor for every chunk part of file
+            tracing::debug!(file = ?file, "checking file replication level");
+            // check a replication factor for every chunk part of a file
             let chunks = self
                 .metadata
                 .get_chunks(
                     ChunksQueryBuilder::default()
                         .file_id(&file.id)
                         .active_node(true)
+                        .parity_shard(false)
                         .build()?,
                 )
                 .await?;
@@ -321,7 +322,7 @@ impl MasterActor {
         chunk_locations: &HashMap<i32, Vec<String>>,
         nodes: &Vec<Node>,
     ) -> anyhow::Result<()> {
-        tracing::info!(
+        tracing::debug!(
                         chunk_index = chunk_index,
                         file = ?file,
                         "replication level is not met");
@@ -346,7 +347,7 @@ impl MasterActor {
         let nodes_to_pick = filter_out_nodes_without_chunk(nodes, &chunk_locations, chunk_index)?;
 
         if nodes_to_pick.is_empty() {
-            tracing::info!(
+            tracing::debug!(
                   chunk_index = chunk_index,
                     file = ?file,
                     "there are no nodes without given chunk, skipping",
@@ -544,7 +545,7 @@ fn check_if_worker_is_health(
 ) -> bool {
     match res {
         Ok(_) => {
-            tracing::info!(worker_name = name, "worker node is healthy");
+            tracing::debug!(worker_name = name, "worker node is healthy");
             true
         }
         Err(err) => match err {
@@ -582,7 +583,7 @@ async fn run_master_actor(mut a: MasterActor, cancellation_token: CancellationTo
                         tracing::error!(err=?err, "health check failed");
                     },
                     None => {
-                        tracing::info!("master actor channel is closed, terminating");
+                        tracing::debug!("master actor channel is closed, terminating");
                         return
                     }
                 }

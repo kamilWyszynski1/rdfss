@@ -8,18 +8,22 @@ tasks:
 
   worker1:
     cmds:
+      - lsof -i -P -n | grep 3001 | awk '{print $2}' | xargs -r kill -9
       - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3001 --rpc-port=50051 --name=worker1'
 
   worker2:
     cmds:
+      - lsof -i -P -n | grep 3002 | awk '{print $2}' | xargs -r kill -9
       - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3002 --rpc-port=50052 --name=worker2'
 
   worker3:
     cmds:
+      - lsof -i -P -n | grep 3003 | awk '{print $2}' | xargs -r kill -9
       - cargo watch --ignore 'worker*' -x 'r --bin worker -- --port=3003 --rpc-port=50053 --name=worker3'
 
   server:
     cmds:
+      - lsof -i -P -n | grep 3000 | awk '{print $2}' | xargs -r kill -9
       - cargo watch --ignore 'worker*' -x 'r --bin server -- --port=3000'
 
   redis:
